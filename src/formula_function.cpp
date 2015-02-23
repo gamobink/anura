@@ -1069,7 +1069,7 @@ FUNCTION_DEF(keys, 1, 1, "keys(map) -> list: gives the keys for a map")
 	return map.get_keys();
 
 FUNCTION_ARGS_DEF
-	ARG_TYPE("map|custom_obj|level");
+	ARG_TYPE("map");
 FUNCTION_TYPE_DEF
 	return variant_type::get_list(args()[0]->query_variant_type()->is_map_of().first);
 END_FUNCTION_DEF(keys)
@@ -4699,18 +4699,12 @@ END_FUNCTION_DEF(types_compatible)
 FUNCTION_DEF(typeof, 1, 1, "typeof(expression) -> string: yields the statically known type of the given expression")
 	variant v = args()[0]->evaluate(variables);
 	return variant(get_variant_type_from_value(v)->to_string());
-FUNCTION_ARGS_DEF
-	ARG_TYPE("any");
-	RETURN_TYPE("string");
 END_FUNCTION_DEF(typeof)
 
 FUNCTION_DEF(static_typeof, 1, 1, "static_typeof(expression) -> string: yields the statically known type of the given expression")
 	variant_type_ptr type = args()[0]->query_variant_type();
 	ASSERT_LOG(type.get() != NULL, "NULL VALUE RETURNED FROM TYPE QUERY");
 	return variant(type->base_type_no_enum()->to_string());
-FUNCTION_ARGS_DEF
-	ARG_TYPE("any");
-	RETURN_TYPE("string");
 END_FUNCTION_DEF(static_typeof)
 
 class gc_command : public game_logic::command_callable
