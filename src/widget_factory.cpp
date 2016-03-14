@@ -36,7 +36,9 @@
 #include "dialog.hpp"
 #include "drag_widget.hpp"
 #include "dropdown_widget.hpp"
+#ifndef NO_EDITOR
 #include "file_chooser_dialog.hpp"
+#endif
 #include "graphical_font_label.hpp"
 #include "grid_widget.hpp"
 #include "image_widget.hpp"
@@ -82,8 +84,10 @@ namespace widget_factory
 			return WidgetPtr(new Button(v,e));
 		} else if(wtype == "checkbox") {
 			return WidgetPtr(new Checkbox(v,e));
+	#ifndef NO_EDITOR
 		} else if(wtype == "combobox" || wtype == "listbox") {
 			return WidgetPtr(new gui::DropdownWidget(v,e));
+	#endif
 		} else if(wtype == "dialog") {
 			return WidgetPtr(new Dialog(v,e));
 	#ifndef NO_EDITOR
@@ -122,8 +126,10 @@ namespace widget_factory
 			return WidgetPtr(new ColorPicker(v, e));
 		} else if(wtype == "layout") {
 			return WidgetPtr(new LayoutWidget(v, e));
+	#ifndef NO_EDITOR
 		} else if(wtype == "file_chooser") {
 			return WidgetPtr(new FileChooserDialog(v, e));
+	#endif
 		} else if(wtype == "poly_map") {
 			return WidgetPtr(new geometry::PolyMap(v, e));
 		} else if(wtype == "particle_system_widget") {
@@ -134,8 +140,10 @@ namespace widget_factory
 	#endif
 		//} else if(wtype == "scrollable") {
 		//} else if(wtype == "widget") {
+	#ifndef NO_EDITOR
 		} else if(wtype == "tree") {
 			return WidgetPtr(new TreeViewWidget(v, e));
+	#endif
 		} else {
 			ASSERT_LOG(false, "Unable to create a widget of type " << wtype);
 			return WidgetPtr();

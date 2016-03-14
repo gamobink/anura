@@ -569,7 +569,7 @@ namespace {
 						}
 					}
 
-					TextFragment fragment = { xpos, ypos, static_cast<float>(extents.width), static_cast<float>(extents.height), static_cast<float>(extents.x_advance), extents.y_bearing, font, font_size, tag, item.color, std::string(i1, i2), valign, font_extents, svg };
+					TextFragment fragment = { xpos, ypos, static_cast<float>(extents.width), static_cast<float>(extents.height), static_cast<float>(extents.x_advance), static_cast<float>(extents.y_bearing), font, font_size, tag, item.color, std::string(i1, i2), valign, font_extents, svg };
 					output.back().fragments.push_back(fragment);
 					output.back().fragment_width += static_cast<float>(extents.width);
 

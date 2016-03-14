@@ -619,9 +619,11 @@ namespace json
 				}
 
 				in_edit_and_continue = true;
-				edit_and_continue_fn(module::map_file(fname), 
+#ifndef NO_EDITOR
+				edit_and_continue_fn(module::map_file(fname),
 					formatter() << "At " << module::map_file(fname) << " " << e.line << ": " << e.message, 
 					[=](){ parse_from_file(fname, options); });
+#endif
 				in_edit_and_continue = false;
 				return parse_from_file(fname, options);
 			}

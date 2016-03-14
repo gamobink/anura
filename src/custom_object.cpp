@@ -61,6 +61,7 @@
 #include "formula_profiler.hpp"
 #include "geometry_callable.hpp"
 #include "graphical_font.hpp"
+#include "input.hpp"
 #include "json_parser.hpp"
 #include "level.hpp"
 #include "level_logic.hpp"

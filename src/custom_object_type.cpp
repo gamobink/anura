@@ -791,7 +791,9 @@ CustomObjectTypePtr CustomObjectType::recreate(const std::string& id,
 			}
 
 			in_edit_and_continue = true;
+#ifndef NO_EDITOR
 			edit_and_continue_fn(path_itor->second, e.msg, [=](){ CustomObjectType::recreate(id, old_type); });
+#endif
 			in_edit_and_continue = false;
 			return recreate(id, old_type);
 		}
@@ -1197,10 +1199,10 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 	callable_definition_->setTypeName("obj " + id);
 
 	CustomObjectCallable::instance();
-
+	
+#ifndef NO_EDITOR
 	EditorEntityInfo* EditorInfo = nullptr;
 
-#ifndef NO_EDITOR
 	if(node.has_key("editor_info")) {
 		EditorInfo = new EditorEntityInfo(node["editor_info"]);
 		editor_info_.reset(EditorInfo);
@@ -1465,12 +1467,15 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 					variant editor_info_var = value["editor_info"];
 					static const variant name_key("name");
 					editor_info_var = editor_info_var.add_attr(name_key, variant(k));
+					
+#ifndef NO_EDITOR
 					EditorVariableInfo info(editor_info_var);
 					info.setIsProperty();
 
 					ASSERT_LOG(EditorInfo, "Object type " << id_ << " must have EditorInfo section since some of its properties have EditorInfo sections");
 
 					EditorInfo->addProperty(info);
+#endif
 				}
 
 				if(value["weak"].as_bool(false)) {

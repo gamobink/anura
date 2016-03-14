@@ -4718,7 +4718,9 @@ std::map<std::string, variant>& get_doc_cache(bool prefs_dir) {
 			bool success = false;
 			std::function<void()> fn(std::bind(run_expression_for_edit_and_continue, args()[0], &variables, &success));
 
+#ifndef NO_EDITOR
 			edit_and_continue_fn(filename, e.msg, fn);
+#endif
 			if(success == false) {
 				_exit(0);
 			}

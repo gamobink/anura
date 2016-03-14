@@ -896,6 +896,7 @@ std::map<std::string, std::string>& class_path_map()
 					LOG_ERROR("ERROR LOADING NEW CLASS");
 				}
 			} else {
+#ifndef NO_EDITOR
 				if(preferences::edit_and_continue()) {
 					assert_recover_scope recover_scope;
 					try {
@@ -910,6 +911,7 @@ std::map<std::string, std::string>& class_path_map()
 				} else {
 					result = build_class(type);
 				}
+#endif
 			}
 
 			classes_[type] = result;

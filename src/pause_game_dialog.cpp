@@ -217,6 +217,10 @@ PAUSE_GAME_RESULT show_pause_game_dialog()
 	ButtonPtr language_button(new Button(language_label, show_language_dialog, BUTTON_STYLE_NORMAL, buttonResolution));
 	ButtonPtr b3(new Button(return_label, std::bind(end_dialog, &dd, &result, PAUSE_GAME_RESULT::GO_TO_TITLESCREEN), BUTTON_STYLE_NORMAL, buttonResolution));
 	ButtonPtr b4(new Button(exit_label, std::bind(end_dialog, &dd, &result, PAUSE_GAME_RESULT::QUIT), BUTTON_STYLE_DEFAULT, buttonResolution));
+#if TARGET_OS_IOS
+#define show_video_selection_dialog 0
+	show_video_mode_select = false;
+#endif
 	ButtonPtr b_video(new Button(video_select_label, show_video_selection_dialog, BUTTON_STYLE_NORMAL, buttonResolution));
 	
 	b1->setDim(button_width, button_height);

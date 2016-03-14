@@ -35,17 +35,18 @@
 #include "filesystem.hpp"
 #include "module.hpp"
 #include "preferences.hpp"
+#include "profile_timer.hpp"
 #include "sound.hpp"
 #include "thread.hpp"
 
 
 #if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
-#include "iphone_sound.h"
+// #include "iphone_sound.h"
 #endif
 
 #include "variant_utils.hpp"
 
-namespace sound 
+namespace sound
 {
 	namespace 
 	{
@@ -65,12 +66,8 @@ namespace sound
 		float engine_music_volume = 1.0;
 		float track_music_volume = 1.0;
 		const int SampleRate = 44100;
-		// number of allocated channels, 
-#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+		// number of allocated channels,
 		const size_t NumChannels = 16;
-#else
-		const size_t NumChannels = 16;
-#endif
 
 		#ifdef WIN32
 		const size_t BufferSize = 4096;
@@ -97,22 +94,22 @@ namespace sound
 			return item;
 		}
 
-#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		Mix_Music* current_mix_music = nullptr;
-#else
-		bool playing_music = false;
-#endif
+//#else
+//		bool playing_music = false;
+//#endif
 
 		//function which gets called when music finishes playing. It starts playing
 		//of the next scheduled track, if there is one.
 		void on_music_finished()
 		{
-#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 			Mix_FreeMusic(current_mix_music);
 			current_mix_music = nullptr;
-#else
-			playing_music = false;
-#endif
+//#else
+//			playing_music = false;
+//#endif
 			if(next_music().name.empty() == false) {
 				play_music(next_music().name, false, next_music().fade_time);
 			}
@@ -140,179 +137,179 @@ namespace sound
 			}
 		}
 
-#if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
-
-		class sound; //so mixer can make pointers to it
-
-		struct mixer
-		{
-			/* channel array holds information about currently playing sounds */
-			struct
-			{
-				Uint8 *position; /* what is the current position in the buffer of this sound ? */
-				Uint32 remaining; /* how many bytes remaining before we're done playing the sound ? */
-				Uint32 timestamp; /* when did this sound start playing ? */
-				int volume;
-				int loops;
-				sound *s;
-			} channels[NumChannels];
-			SDL_AudioSpec outputSpec; /* what audio format are we using for output? */
-			int numSoundsPlaying; /* how many sounds are currently playing */
-		} mixer;
-
-		class sound
-		{
-			public:
-			std::shared_ptr<Uint8> buffer; /* audio buffer for sound file */
-			Uint32 length; /* length of the buffer (in bytes) */
-			sound (const std::string& file = "") : length(0)
-			{
-				if (file == "") return;
-				SDL_AudioSpec spec; /* the audio format of the .wav file */
-				SDL_AudioCVT cvt; /* used to convert .wav to output format when formats differ */
-				Uint8 *tmp_buffer;
-#if defined(__ANDROID__)
-				if(SDL_LoadWAV_RW(sys::read_sdl_rw_from_asset(module::map_file(file).c_str(), 1, &spec, &tmp_buffer, &length) == nullptr)
-#else
-				if (SDL_LoadWAV(module::map_file(file).c_str(), &spec, &tmp_buffer, &length) == nullptr)
-#endif
-				{
-					std::cerr << "Could not load sound: " << file << "\n";
-					return; //should maybe die
-				}
-				buffer = std::shared_ptr<Uint8>(tmp_buffer, SDL_free);
-				return; // don't convert the audio, assume it's already in the right format
-				/* build the audio converter */
-				int result = SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq,
-					mixer.outputSpec.format, mixer.outputSpec.channels, mixer.outputSpec.freq);
-				if (result == -1)
-				{
-					std::cerr << "Could not build audio CVT for: " << file << "\n";
-					return; //should maybe die
-				} else if (result != 0) {
-					/* 
-					 this happens when the .wav format differs from the output format.
-					 we convert the .wav buffer here
-					 */
-					cvt.buf = (Uint8 *) SDL_malloc(length * cvt.len_mult); /* allocate conversion buffer */
-					cvt.len = length; /* set conversion buffer length */
-					SDL_memcpy(cvt.buf, buffer.get(), length); /* copy sound to conversion buffer */
-					if (SDL_ConvertAudio(&cvt) == -1) /* convert the sound */
-					{
-						std::cerr << "Could not convert sound: " << file << "\n";
-						SDL_free(cvt.buf);
-						return; //should maybe die
-					}
-					buffer = std::shared_ptr<Uint8>(cvt.buf, SDL_free); /* point sound buffer to converted buffer */
-					length = cvt.len_cvt; /* set sound buffer's new length */
-				}
-			}
+//#if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
+//
+//		class sound; //so mixer can make pointers to it
+//
+//		struct mixer
+//		{
+//			/* channel array holds information about currently playing sounds */
+//			struct
+//			{
+//				Uint8 *position; /* what is the current position in the buffer of this sound ? */
+//				Uint32 remaining; /* how many bytes remaining before we're done playing the sound ? */
+//				Uint32 timestamp; /* when did this sound start playing ? */
+//				int volume;
+//				int loops;
+//				sound *s;
+//			} channels[NumChannels];
+//			SDL_AudioSpec outputSpec; /* what audio format are we using for output? */
+//			int numSoundsPlaying; /* how many sounds are currently playing */
+//		} mixer;
+//
+//		class sound
+//		{
+//			public:
+//			std::shared_ptr<Uint8> buffer; /* audio buffer for sound file */
+//			Uint32 length; /* length of the buffer (in bytes) */
+//			sound (const std::string& file = "") : length(0)
+//			{
+//				if (file == "") return;
+//				SDL_AudioSpec spec; /* the audio format of the .wav file */
+//				SDL_AudioCVT cvt; /* used to convert .wav to output format when formats differ */
+//				Uint8 *tmp_buffer;
+////#if defined(__ANDROID__)
+////				if(SDL_LoadWAV_RW(sys::read_sdl_rw_from_asset(module::map_file(file).c_str(), 1, &spec, &tmp_buffer, &length) == nullptr)
+////#else
+//				if (SDL_LoadWAV(module::map_file(file).c_str(), &spec, &tmp_buffer, &length) == nullptr)
+////#endif
+//				{
+//					std::cerr << "Could not load sound: " << file << "\n";
+//					return; //should maybe die
+//				}
+//				buffer = std::shared_ptr<Uint8>(tmp_buffer, SDL_free);
+//				return; // don't convert the audio, assume it's already in the right format
+//				/* build the audio converter */
+//				int result = SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq,
+//					mixer.outputSpec.format, mixer.outputSpec.channels, mixer.outputSpec.freq);
+//				if (result == -1)
+//				{
+//					std::cerr << "Could not build audio CVT for: " << file << "\n";
+//					return; //should maybe die
+//				} else if (result != 0) {
+//					/* 
+//					 this happens when the .wav format differs from the output format.
+//					 we convert the .wav buffer here
+//					 */
+//					cvt.buf = (Uint8 *) SDL_malloc(length * cvt.len_mult); /* allocate conversion buffer */
+//					cvt.len = length; /* set conversion buffer length */
+//					SDL_memcpy(cvt.buf, buffer.get(), length); /* copy sound to conversion buffer */
+//					if (SDL_ConvertAudio(&cvt) == -1) /* convert the sound */
+//					{
+//						std::cerr << "Could not convert sound: " << file << "\n";
+//						SDL_free(cvt.buf);
+//						return; //should maybe die
+//					}
+//					buffer = std::shared_ptr<Uint8>(cvt.buf, SDL_free); /* point sound buffer to converted buffer */
+//					length = cvt.len_cvt; /* set sound buffer's new length */
+//				}
+//			}
+//	
+//			bool operator==(void *p) {return buffer.get() == p;}
+//		};
+//	
+//		void sdl_stop_channel (int channel)
+//		{
+//			if (mixer.channels[channel].position == nullptr) return; // if the sound was playing in the first place
+//			mixer.channels[channel].position = nullptr;  /* indicates no sound playing on channel anymore */
+//			mixer.numSoundsPlaying--;
+//			if (mixer.numSoundsPlaying == 0)
+//			{
+//				/* if no sounds left playing, pause audio callback */
+//				SDL_PauseAudio(1);
+//			}
+//		}
+//
+//		void sdl_audio_callback (void *userdata, Uint8 * stream, int len)
+//		{
+//			int i;
+//			int copy_amt;
+//			SDL_memset(stream, mixer.outputSpec.silence, len);  /* initialize buffer to silence */
+//			/* for each channel, mix in whatever is playing on that channel */
+//			for (i = 0; i < NumChannels; i++)
+//			{
+//				if (mixer.channels[i].position == nullptr)
+//				{
+//					/* if no sound is playing on this channel */
+//					continue;           /* nothing to do for this channel */
+//				}
+//		
+//				/* copy len bytes to the buffer, unless we have fewer than len bytes remaining */
+//				copy_amt = mixer.channels[i].remaining < len ? mixer.channels[i].remaining : len;
+//		
+//				/* mix this sound effect with the output */
+//				SDL_MixAudioFormat(stream, mixer.channels[i].position, mixer.outputSpec.format, copy_amt, sfx_volume * mixer.channels[i].volume);
+//		
+//				/* update buffer position in sound effect and the number of bytes left */
+//				mixer.channels[i].position += copy_amt;
+//				mixer.channels[i].remaining -= copy_amt;
+//		
+//				/* did we finish playing the sound effect ? */
+//				if (mixer.channels[i].remaining == 0)
+//				{
+//					if (mixer.channels[i].loops != 0)
+//					{
+//						mixer.channels[i].position = mixer.channels[i].s->buffer.get();
+//						mixer.channels[i].remaining = mixer.channels[i].s->length;
+//						if (mixer.channels[i].loops != -1) mixer.channels[i].loops--;
+//					} else {
+//						sdl_stop_channel(i);
+//					}
+//				}
+//			}
+//		}
+//
+//		int sdl_play_sound (sound *s, int loops)
+//		{
+//			/*
+//			 find an empty channel to play on.
+//			 if no channel is available, use oldest channel
+//			 */
+//			int i;
+//			int selected_channel = -1;
+//			int oldest_channel = 0;
+//	
+//			if (mixer.numSoundsPlaying == 0) {
+//				/* we're playing a sound now, so start audio callback back up */
+//				SDL_PauseAudio(0);
+//			}
+//	
+//			/* find a sound channel to play the sound on */
+//			for (i = 0; i < NumChannels; i++) {
+//				if (mixer.channels[i].position == nullptr) {
+//					/* if no sound on this channel, select it */
+//					selected_channel = i;
+//					break;
+//				}
+//				/* if this channel's sound is older than the oldest so far, set it to oldest */
+//				if (mixer.channels[i].timestamp < mixer.channels[oldest_channel].timestamp)
+//					oldest_channel = i;
+//			}
+//	
+//			/* no empty channels, take the oldest one */
+//			if (selected_channel == -1)
+//				selected_channel = oldest_channel;
+//			else
+//				mixer.numSoundsPlaying++;
+//	
+//			/* point channel data to wav data */
+//			mixer.channels[selected_channel].position = s->buffer.get();
+//			mixer.channels[selected_channel].remaining = s->length;
+//			mixer.channels[selected_channel].timestamp = profile::get_tick_time();
+//			mixer.channels[selected_channel].volume = SDL_MIX_MAXVOLUME;
+//			mixer.channels[selected_channel].loops = loops;
+//			mixer.channels[selected_channel].s = s;
+//	
+//			return selected_channel;
+//		}
+//
+//#endif
 	
-			bool operator==(void *p) {return buffer.get() == p;}
-		};
-	
-		void sdl_stop_channel (int channel)
-		{
-			if (mixer.channels[channel].position == nullptr) return; // if the sound was playing in the first place
-			mixer.channels[channel].position = nullptr;  /* indicates no sound playing on channel anymore */
-			mixer.numSoundsPlaying--;
-			if (mixer.numSoundsPlaying == 0)
-			{
-				/* if no sounds left playing, pause audio callback */
-				SDL_PauseAudio(1);
-			}
-		}
-
-		void sdl_audio_callback (void *userdata, Uint8 * stream, int len)
-		{
-			int i;
-			int copy_amt;
-			SDL_memset(stream, mixer.outputSpec.silence, len);  /* initialize buffer to silence */
-			/* for each channel, mix in whatever is playing on that channel */
-			for (i = 0; i < NumChannels; i++)
-			{
-				if (mixer.channels[i].position == nullptr)
-				{
-					/* if no sound is playing on this channel */
-					continue;           /* nothing to do for this channel */
-				}
-		
-				/* copy len bytes to the buffer, unless we have fewer than len bytes remaining */
-				copy_amt = mixer.channels[i].remaining < len ? mixer.channels[i].remaining : len;
-		
-				/* mix this sound effect with the output */
-				SDL_MixAudioFormat(stream, mixer.channels[i].position, mixer.outputSpec.format, copy_amt, sfx_volume * mixer.channels[i].volume);
-		
-				/* update buffer position in sound effect and the number of bytes left */
-				mixer.channels[i].position += copy_amt;
-				mixer.channels[i].remaining -= copy_amt;
-		
-				/* did we finish playing the sound effect ? */
-				if (mixer.channels[i].remaining == 0)
-				{
-					if (mixer.channels[i].loops != 0)
-					{
-						mixer.channels[i].position = mixer.channels[i].s->buffer.get();
-						mixer.channels[i].remaining = mixer.channels[i].s->length;
-						if (mixer.channels[i].loops != -1) mixer.channels[i].loops--;
-					} else {
-						sdl_stop_channel(i);
-					}
-				}
-			}
-		}
-
-		int sdl_play_sound (sound *s, int loops)
-		{
-			/*
-			 find an empty channel to play on.
-			 if no channel is available, use oldest channel
-			 */
-			int i;
-			int selected_channel = -1;
-			int oldest_channel = 0;
-	
-			if (mixer.numSoundsPlaying == 0) {
-				/* we're playing a sound now, so start audio callback back up */
-				SDL_PauseAudio(0);
-			}
-	
-			/* find a sound channel to play the sound on */
-			for (i = 0; i < NumChannels; i++) {
-				if (mixer.channels[i].position == nullptr) {
-					/* if no sound on this channel, select it */
-					selected_channel = i;
-					break;
-				}
-				/* if this channel's sound is older than the oldest so far, set it to oldest */
-				if (mixer.channels[i].timestamp < mixer.channels[oldest_channel].timestamp)
-					oldest_channel = i;
-			}
-	
-			/* no empty channels, take the oldest one */
-			if (selected_channel == -1)
-				selected_channel = oldest_channel;
-			else
-				mixer.numSoundsPlaying++;
-	
-			/* point channel data to wav data */
-			mixer.channels[selected_channel].position = s->buffer.get();
-			mixer.channels[selected_channel].remaining = s->length;
-			mixer.channels[selected_channel].timestamp = profile::get_tick_time();
-			mixer.channels[selected_channel].volume = SDL_MIX_MAXVOLUME;
-			mixer.channels[selected_channel].loops = loops;
-			mixer.channels[selected_channel].s = s;
-	
-			return selected_channel;
-		}
-
-#endif
-	
-#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		typedef std::map<std::string, Mix_Chunk*> cache_map;
-#else
-		typedef std::map<std::string, sound> cache_map;
-#endif
+//#else
+//		typedef std::map<std::string, sound> cache_map;
+//#endif
 		cache_map cache;
 
 		cache_map threaded_cache;
@@ -323,7 +320,7 @@ namespace sound
 
 		void thread_load(const std::string& file)
 		{
-#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 #if defined(__ANDROID__)
 			Mix_Chunk* chunk = Mix_LoadWAV_RW(sys::read_sdl_rw_from_asset(module::map_file("sounds/" + file).c_str()),1);
 #else
@@ -338,16 +335,16 @@ namespace sound
 				threaded_cache[file] = chunk;
 			}
 
-#else
-			std::string wav_file = file;
-			wav_file.replace(wav_file.length()-3, wav_file.length(), "wav");
-			sound s("sounds_wav/" + wav_file);
-
-			{
-				threading::lock l(cache_mutex);
-				threaded_cache[file] = s;
-			}
-#endif
+//#else
+//			std::string wav_file = file;
+//			wav_file.replace(wav_file.length()-3, wav_file.length(), "wav");
+//			sound s("sounds_wav/" + wav_file);
+//
+//			{
+//				threading::lock l(cache_mutex);
+//				threaded_cache[file] = s;
+//			}
+//#endif
 		}
 
 		std::map<std::string, std::shared_ptr<threading::thread> > loading_threads;
@@ -368,7 +365,7 @@ namespace sound
 			}
 		}
 
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//      #if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 
 		if(Mix_OpenAudio(SampleRate, MIX_DEFAULT_FORMAT, 2, BufferSize) == -1) {
 			sound_ok = false;
@@ -382,27 +379,27 @@ namespace sound
 		Mix_ChannelFinished(on_sound_finished);
 		Mix_HookMusicFinished(on_music_finished);
 		Mix_VolumeMusic(MIX_MAX_VOLUME);
-	#else
-		iphone_init_music(on_music_finished);
-		sound_ok = true;
-	
-		/* initialize the mixer */
-		SDL_memset(&mixer, 0, sizeof(mixer));
-		/* setup output format */
-		mixer.outputSpec.freq = SampleRate;
-		mixer.outputSpec.format = AUDIO_S16LSB;
-		mixer.outputSpec.channels = 1;
-		mixer.outputSpec.samples = 256;
-		mixer.outputSpec.callback = sdl_audio_callback;
-		mixer.outputSpec.userdata = nullptr;
-	
-		/* open audio for output */
-		if (SDL_OpenAudio(&mixer.outputSpec, nullptr) != 0)
-		{
-			std::cerr << "Opening audio failed\n";
-			sound_ok = false;
-		}
-	#endif
+//	#else
+//		iphone_init_music(on_music_finished);
+//		sound_ok = true;
+//	
+//		/* initialize the mixer */
+//		SDL_memset(&mixer, 0, sizeof(mixer));
+//		/* setup output format */
+//		mixer.outputSpec.freq = SampleRate;
+//		mixer.outputSpec.format = AUDIO_S16LSB;
+//		mixer.outputSpec.channels = 1;
+//		mixer.outputSpec.samples = 256;
+//		mixer.outputSpec.callback = sdl_audio_callback;
+//		mixer.outputSpec.userdata = nullptr;
+//	
+//		/* open audio for output */
+//		if (SDL_OpenAudio(&mixer.outputSpec, nullptr) != 0)
+//		{
+//			std::cerr << "Opening audio failed\n";
+//			sound_ok = false;
+//		}
+//	#endif
 
 		set_music_volume(user_music_volume);
 	}
@@ -415,13 +412,13 @@ namespace sound
 
 		loading_threads.clear();
 
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		Mix_HookMusicFinished(nullptr);
 		next_music().name.clear();
 		Mix_CloseAudio();
-	#else
-		iphone_kill_music();
-	#endif
+//	#else
+//		iphone_kill_music();
+//	#endif
 	}
 
 	void init_music(variant node)
@@ -438,9 +435,9 @@ namespace sound
 	void mute (bool flag)
 	{
 		mute_ = flag;
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		Mix_VolumeMusic(static_cast<int>(user_music_volume*track_music_volume*engine_music_volume*MIX_MAX_VOLUME*(!flag)));
-	#endif
+//	#endif
 	}
 
 	void preload(const std::string& file)
@@ -477,7 +474,7 @@ namespace sound
 			return -1;
 		}
 
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		Mix_Chunk* chunk = cache[file];
 		if(chunk == nullptr) {
 			ASSERT_LOG(!g_assert_on_missing_sound, "FATAL: Sound file: " << file << " missing");
@@ -489,27 +486,27 @@ namespace sound
 			Mix_SetPanning(result, static_cast<uint8_t>(255*g_stereo_left), static_cast<uint8_t>(255*g_stereo_right));
 		}
 
-	#else
-		sound& s = cache[file];
-		if(s == nullptr) {
-			return -1;
-		}
-	
-		int result = sdl_playSound(&s, loops);
-	#endif
+//	#else
+//		sound& s = cache[file];
+//		if(s == nullptr) {
+//			return -1;
+//		}
+//	
+//		int result = sdl_playSound(&s, loops);
+//	#endif
 
 		//record which channel the sound is playing on.
 		if(result >= 0) {
 			if(static_cast<int>(channels_to_sounds_playing.size()) <= result) {
 				channels_to_sounds_playing.resize(result + 1);
 			}
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 			if(fade_in_time == 0.0f) {
 				Mix_Volume(result, static_cast<int>(volume*sfx_volume*MIX_MAX_VOLUME)); //start sound at full volume
 			} else {
 				Mix_Volume(result, 0); 
 			}
-	#endif
+//	#endif
 
 			channels_to_sounds_playing[result].file = file;
 			channels_to_sounds_playing[result].object = object;
@@ -548,7 +545,7 @@ namespace sound
 		}
 
 		for(int n = 0; n != channels_to_sounds_playing.size(); ++n) {
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 			sound_playing& snd = channels_to_sounds_playing[n];
 			snd.time_cnt += 0.02f;
 			if(snd.fade_in_time > 0.0f) {
@@ -574,7 +571,7 @@ namespace sound
 				}
 			}
 		}
-	#endif
+//	#endif
 	}
 
 	void play(const std::string& file, const void* object, float volume, float fade_in_time)
@@ -596,13 +593,13 @@ namespace sound
 				}
 				channels_to_sounds_playing[n].fade_out_time = fade_out_time;
 				channels_to_sounds_playing[n].time_cnt = 0.0f;
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 				if(fade_out_time == 0.0f) {
 					Mix_HaltChannel(n);
 				}
-	#else
-				sdl_stop_channel(n);
-	#endif
+//	#else
+//				sdl_stop_channel(n);
+//	#endif
 			}
 		}
 
@@ -621,11 +618,11 @@ namespace sound
 			if(((object == nullptr && channels_to_sounds_playing[n].object != nullptr)
 			   || channels_to_sounds_playing[n].object == object) &&
 			   (channels_to_sounds_playing[n].loops != 0)) {
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 				Mix_HaltChannel(n);
-	#else
-				sdl_stop_channel(n);
-	#endif
+//	#else
+//				sdl_stop_channel(n);
+//	#endif
 				channels_to_sounds_playing[n].object = nullptr;
 			} else if(channels_to_sounds_playing[n].object == object) {
 				//this sound is a looped sound, but make sure it keeps going
@@ -674,15 +671,15 @@ namespace sound
 		//find the channel associated with this object.
 		for(int n = 0; n != channels_to_sounds_playing.size(); ++n) {
 			if(channels_to_sounds_playing[n].object == object) {
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 				if(channels_to_sounds_playing[n].fade_in_time > 0.0f) {
 					channels_to_sounds_playing[n].fade_in_time = 0.0f;
 					channels_to_sounds_playing[n].time_cnt = 0.0f;
 				}
 				Mix_Volume(n, static_cast<int>(sfx_volume*volume));
-	#else
-				mixer.channels[n].volume = sfx_volume*volume;
-	#endif
+//	#else
+//				mixer.channels[n].volume = sfx_volume*volume;
+//	#endif
 			} //else, we just do nothing
 		}
 	}
@@ -707,11 +704,11 @@ namespace sound
 		void update_music_volume()
 		{
 			if(sound_init) {
-		#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//		#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 				Mix_VolumeMusic(static_cast<int>(track_music_volume*user_music_volume*engine_music_volume*MIX_MAX_VOLUME));
-		#else
-				iphone_set_music_volume(track_music_volume*user_music_volume*engine_music_volume);
-		#endif
+//		#else
+//				iphone_set_music_volume(track_music_volume*user_music_volume*engine_music_volume);
+//		#endif
 			}
 		}
 	}
@@ -794,7 +791,7 @@ namespace sound
 		}
 		const std::string& path = itor->second;
 
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		if(current_mix_music) {
 			next_music().name = file;
 			next_music().fade_time = fade_time;
@@ -824,27 +821,27 @@ namespace sound
 		} else {
 			Mix_PlayMusic(current_mix_music, -1);
 		}
-	#else
-		if (playing_music)
-		{
-			next_music().name = file;
-			next_music().fade_time = fade_time;
-			iphone_fade_out_music(fade_time);
-			return;
-		}
-
-		if(file.empty()) {
-			return;
-		}
-	
-		current_music_name() = file;
-		if (!sys::file_exists(path)) return;
-		track_music_volume = music_index[file].volume;
-		update_music_volume();
-		iphone_play_music((path).c_str(), -1);
-		iphone_fade_in_music(350);
-		playing_music = true;
-	#endif
+//	#else
+//		if (playing_music)
+//		{
+//			next_music().name = file;
+//			next_music().fade_time = fade_time;
+//			iphone_fade_out_music(fade_time);
+//			return;
+//		}
+//
+//		if(file.empty()) {
+//			return;
+//		}
+//	
+//		current_music_name() = file;
+//		if (!sys::file_exists(path)) return;
+//		track_music_volume = music_index[file].volume;
+//		update_music_volume();
+//		iphone_play_music((path).c_str(), -1);
+//		iphone_fade_in_music(350);
+//		playing_music = true;
+//	#endif
 	}
 
 	void play_music_interrupt(const std::string& file)
@@ -880,7 +877,7 @@ namespace sound
 		}
 		const std::string& path = itor->second;
 
-	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+//	#if !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
 		//note that calling HaltMusic will result in on_music_finished being
 		//called, which releases the current_music pointer.
 		Mix_HaltMusic();
@@ -900,10 +897,10 @@ namespace sound
 		}
 
 		Mix_PlayMusic(current_mix_music, 1);
-	#else
-		iphone_play_music((path).c_str(), 0);
-		playing_music = true;
-	#endif
+//	#else
+//		iphone_play_music((path).c_str(), 0);
+//		playing_music = true;
+//	#endif
 	}
 
 	const std::string& current_music() 

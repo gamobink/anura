@@ -293,8 +293,8 @@ UNIT_TEST(md5_test3) {
 	uint8_t result[16] = { 0 };
 	uint8_t values[3] = { 'a', 'b', 'c' };
 	uint8_t good_result[16] = {
-		'\x90', '\x01', '\x50', '\x98', '\x3C', '\xD2', '\x4F', '\xB0', 
-		'\xD6', '\x96', '\x3F', '\x7D', '\x28', '\xE1', '\x7F', '\x72',
+		static_cast<uint8_t>('\x90'), static_cast<uint8_t>('\x01'), static_cast<uint8_t>('\x50'), static_cast<uint8_t>('\x98'), static_cast<uint8_t>('\x3C'), static_cast<uint8_t>('\xD2'), static_cast<uint8_t>('\x4F'), static_cast<uint8_t>('\xB0'),
+		static_cast<uint8_t>('\xD6'), static_cast<uint8_t>('\x96'), static_cast<uint8_t>('\x3F'), static_cast<uint8_t>('\x7D'), static_cast<uint8_t>('\x28'), static_cast<uint8_t>('\xE1'), static_cast<uint8_t>('\x7F'), static_cast<uint8_t>('\x72'),
 	};
 	struct md5::MD5Context ctx;
 	md5::MD5Init(&ctx);

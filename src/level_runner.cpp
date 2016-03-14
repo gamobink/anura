@@ -1580,13 +1580,14 @@ bool LevelRunner::play_cycle()
 			if(editor_ && key[SDL_SCANCODE_L] 
 				&& !editor_->hasKeyboardFocus() 
 				&& (!console_ || !console_->hasKeyboardFocus())) {
-#endif
 				editor_->toggle_active_level();
 				render_scene(editor_->get_level(), last_draw_position());
 				editor_->toggle_active_level();
+#endif
 				lvl_->setAsCurrentLevel();
 			} else {
 				std::vector<variant> alpha_values;
+#ifndef NO_EDITOR
 				if(!history_trails_.empty()) {
 					for(EntityPtr e : history_trails_) {
 						alpha_values.push_back(e->queryValue("alpha"));
@@ -1594,6 +1595,7 @@ bool LevelRunner::play_cycle()
 						lvl_->add_draw_character(e);
 					}
 				}
+#endif
 				{
 					//profile::manager pman("render_scene");
 					//KRE::ModelManager2D(0, 0, 0.0f, static_cast<float>(g_global_scale));

@@ -104,7 +104,7 @@
 
 #if defined(__APPLE__)
     #include "TargetConditionals.h"
-    #if TARGET_OS_MAC
+    #if TARGET_OS_MAC && !TARGET_OS_IOS
     #define decimal decimal_carbon
         #import <Cocoa/Cocoa.h>
         #undef decimal
@@ -417,7 +417,7 @@ int main(int argcount, char* argvec[])
 	std::cerr.sync_with_stdio(true);
 #endif
 
-#if defined(__APPLE__) && TARGET_OS_MAC
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IOS
     chdir([[[NSBundle mainBundle] resourcePath] fileSystemRepresentation]);
 #endif
 

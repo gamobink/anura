@@ -650,7 +650,11 @@ namespace preferences
 	}
 
 	bool edit_and_continue() {
+#ifndef NO_EDITOR
 		return edit_and_continue_ && !EditorResolutionManager::isActive();
+#else
+		return false;
+#endif
 	}
 
 	void set_edit_and_continue(bool value) {

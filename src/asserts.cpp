@@ -82,6 +82,7 @@ void report_assert_msg(const std::string& m)
 		obj[variant("editor")] = variant(false);
 #endif
 
+#ifndef NO_EDITOR
 		if(preferences::edit_and_continue()) {
 			if(g_edit_and_continue_fn) {
 				edit_and_continue_assert(m, g_edit_and_continue_fn);
@@ -90,6 +91,7 @@ void report_assert_msg(const std::string& m)
 				edit_and_continue_assert(m);
 			}
 		}
+#endif
 
 		stats::record(variant(&obj), Level::getCurrentPtr()->id());
 	} else {
