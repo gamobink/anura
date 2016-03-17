@@ -7,13 +7,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		B5AF26701C91EF4300366340 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF266F1C91EF4300366340 /* AppDelegate.swift */; };
-		B5AF26721C91EF4300366340 /* Shader.fsh in Resources */ = {isa = PBXBuildFile; fileRef = B5AF26711C91EF4300366340 /* Shader.fsh */; };
-		B5AF26741C91EF4300366340 /* Shader.vsh in Resources */ = {isa = PBXBuildFile; fileRef = B5AF26731C91EF4300366340 /* Shader.vsh */; };
-		B5AF26761C91EF4300366340 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF26751C91EF4300366340 /* GameViewController.swift */; };
+		B54002051C99D7ED00AC434D /* AttributeSetGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001EB1C99D7ED00AC434D /* AttributeSetGLES2.cpp */; };
+		B54002061C99D7ED00AC434D /* BlendGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001ED1C99D7ED00AC434D /* BlendGLES2.cpp */; };
+		B54002071C99D7ED00AC434D /* CanvasGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001EF1C99D7ED00AC434D /* CanvasGLES2.cpp */; };
+		B54002081C99D7ED00AC434D /* ClipScopeGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001F11C99D7ED00AC434D /* ClipScopeGLES2.cpp */; };
+		B54002091C99D7ED00AC434D /* DisplayDeviceGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001F31C99D7ED00AC434D /* DisplayDeviceGLES2.cpp */; };
+		B540020A1C99D7ED00AC434D /* EffectsGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001F51C99D7ED00AC434D /* EffectsGLES2.cpp */; };
+		B540020B1C99D7ED00AC434D /* FboGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001F71C99D7ED00AC434D /* FboGLES2.cpp */; };
+		B540020C1C99D7ED00AC434D /* ScissorGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001F91C99D7ED00AC434D /* ScissorGLES2.cpp */; };
+		B540020D1C99D7ED00AC434D /* ShadersGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001FB1C99D7ED00AC434D /* ShadersGLES2.cpp */; };
+		B540020E1C99D7ED00AC434D /* StencilScopeGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001FD1C99D7ED00AC434D /* StencilScopeGLES2.cpp */; };
+		B540020F1C99D7ED00AC434D /* TextureGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54001FF1C99D7ED00AC434D /* TextureGLES2.cpp */; };
+		B54002101C99D7ED00AC434D /* UniformBufferGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54002011C99D7ED00AC434D /* UniformBufferGLES2.cpp */; };
+		B54002111C99D7ED00AC434D /* VGraphGLES2.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B54002031C99D7ED00AC434D /* VGraphGLES2.cpp */; };
+		B54002141C9A05F500AC434D /* modules in Resources */ = {isa = PBXBuildFile; fileRef = B54002131C9A05F500AC434D /* modules */; };
+		B54002181C9A080F00AC434D /* data in Resources */ = {isa = PBXBuildFile; fileRef = B54002151C9A080F00AC434D /* data */; };
+		B54002191C9A080F00AC434D /* images in Resources */ = {isa = PBXBuildFile; fileRef = B54002161C9A080F00AC434D /* images */; };
+		B540021A1C9A080F00AC434D /* music in Resources */ = {isa = PBXBuildFile; fileRef = B54002171C9A080F00AC434D /* music */; };
+		B540021B1C9A08A500AC434D /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BBD1C93B8D600366340 /* GameController.framework */; };
 		B5AF267B1C91EF4300366340 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B5AF267A1C91EF4300366340 /* Assets.xcassets */; };
-		B5AF26851C91F1CA00366340 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B5AF26771C91EF4300366340 /* Main.storyboard */; };
-		B5AF26861C91F1CA00366340 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B5AF267C1C91EF4300366340 /* LaunchScreen.storyboard */; };
 		B5AF26891C91FD0400366340 /* libSDL2_image.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF26871C91FD0400366340 /* libSDL2_image.a */; };
 		B5AF268A1C91FD0400366340 /* libSDL2.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF26881C91FD0400366340 /* libSDL2.a */; };
 		B5AF268E1C92010600366340 /* libSDL2_mixer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF268C1C92010600366340 /* libSDL2_mixer.a */; };
@@ -397,7 +409,6 @@
 		B5AF2BB91C93B84B00366340 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BB81C93B84B00366340 /* Foundation.framework */; };
 		B5AF2BBA1C93B86700366340 /* libboost_iostreams.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BA41C92413100366340 /* libboost_iostreams.a */; };
 		B5AF2BBC1C93B8CD00366340 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BBB1C93B8CD00366340 /* CoreMotion.framework */; };
-		B5AF2BBE1C93B8D600366340 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BBD1C93B8D600366340 /* GameController.framework */; };
 		B5AF2BC01C93B8E200366340 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BBF1C93B8E200366340 /* UIKit.framework */; };
 		B5AF2BC21C93B96400366340 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BC11C93B96400366340 /* ImageIO.framework */; };
 		B5AF2BC41C93B9CA00366340 /* MobileCoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B5AF2BC31C93B9CA00366340 /* MobileCoreServices.framework */; };
@@ -431,14 +442,38 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B54001EB1C99D7ED00AC434D /* AttributeSetGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = AttributeSetGLES2.cpp; sourceTree = "<group>"; };
+		B54001EC1C99D7ED00AC434D /* AttributeSetGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = AttributeSetGLES2.hpp; sourceTree = "<group>"; };
+		B54001ED1C99D7ED00AC434D /* BlendGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = BlendGLES2.cpp; sourceTree = "<group>"; };
+		B54001EE1C99D7ED00AC434D /* BlendGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = BlendGLES2.hpp; sourceTree = "<group>"; };
+		B54001EF1C99D7ED00AC434D /* CanvasGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CanvasGLES2.cpp; sourceTree = "<group>"; };
+		B54001F01C99D7ED00AC434D /* CanvasGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = CanvasGLES2.hpp; sourceTree = "<group>"; };
+		B54001F11C99D7ED00AC434D /* ClipScopeGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = ClipScopeGLES2.cpp; sourceTree = "<group>"; };
+		B54001F21C99D7ED00AC434D /* ClipScopeGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = ClipScopeGLES2.hpp; sourceTree = "<group>"; };
+		B54001F31C99D7ED00AC434D /* DisplayDeviceGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DisplayDeviceGLES2.cpp; sourceTree = "<group>"; };
+		B54001F41C99D7ED00AC434D /* DisplayDeviceGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = DisplayDeviceGLES2.hpp; sourceTree = "<group>"; };
+		B54001F51C99D7ED00AC434D /* EffectsGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = EffectsGLES2.cpp; sourceTree = "<group>"; };
+		B54001F61C99D7ED00AC434D /* EffectsGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = EffectsGLES2.hpp; sourceTree = "<group>"; };
+		B54001F71C99D7ED00AC434D /* FboGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = FboGLES2.cpp; sourceTree = "<group>"; };
+		B54001F81C99D7ED00AC434D /* FboGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = FboGLES2.hpp; sourceTree = "<group>"; };
+		B54001F91C99D7ED00AC434D /* ScissorGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = ScissorGLES2.cpp; sourceTree = "<group>"; };
+		B54001FA1C99D7ED00AC434D /* ScissorGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = ScissorGLES2.hpp; sourceTree = "<group>"; };
+		B54001FB1C99D7ED00AC434D /* ShadersGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = ShadersGLES2.cpp; sourceTree = "<group>"; };
+		B54001FC1C99D7ED00AC434D /* ShadersGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = ShadersGLES2.hpp; sourceTree = "<group>"; };
+		B54001FD1C99D7ED00AC434D /* StencilScopeGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = StencilScopeGLES2.cpp; sourceTree = "<group>"; };
+		B54001FE1C99D7ED00AC434D /* StencilScopeGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = StencilScopeGLES2.hpp; sourceTree = "<group>"; };
+		B54001FF1C99D7ED00AC434D /* TextureGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = TextureGLES2.cpp; sourceTree = "<group>"; };
+		B54002001C99D7ED00AC434D /* TextureGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = TextureGLES2.hpp; sourceTree = "<group>"; };
+		B54002011C99D7ED00AC434D /* UniformBufferGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = UniformBufferGLES2.cpp; sourceTree = "<group>"; };
+		B54002021C99D7ED00AC434D /* UniformBufferGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = UniformBufferGLES2.hpp; sourceTree = "<group>"; };
+		B54002031C99D7ED00AC434D /* VGraphGLES2.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = VGraphGLES2.cpp; sourceTree = "<group>"; };
+		B54002041C99D7ED00AC434D /* VGraphGLES2.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = VGraphGLES2.hpp; sourceTree = "<group>"; };
+		B54002131C9A05F500AC434D /* modules */ = {isa = PBXFileReference; lastKnownFileType = folder; name = modules; path = ../modules; sourceTree = "<group>"; };
+		B54002151C9A080F00AC434D /* data */ = {isa = PBXFileReference; lastKnownFileType = folder; name = data; path = ../data; sourceTree = "<group>"; };
+		B54002161C9A080F00AC434D /* images */ = {isa = PBXFileReference; lastKnownFileType = folder; name = images; path = ../images; sourceTree = "<group>"; };
+		B54002171C9A080F00AC434D /* music */ = {isa = PBXFileReference; lastKnownFileType = folder; name = music; path = ../music; sourceTree = "<group>"; };
 		B5AF266C1C91EF4300366340 /* Anura.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Anura.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B5AF266F1C91EF4300366340 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		B5AF26711C91EF4300366340 /* Shader.fsh */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.glsl; name = Shader.fsh; path = Shaders/Shader.fsh; sourceTree = "<group>"; };
-		B5AF26731C91EF4300366340 /* Shader.vsh */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.glsl; name = Shader.vsh; path = Shaders/Shader.vsh; sourceTree = "<group>"; };
-		B5AF26751C91EF4300366340 /* GameViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewController.swift; sourceTree = "<group>"; };
-		B5AF26781C91EF4300366340 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		B5AF267A1C91EF4300366340 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		B5AF267D1C91EF4300366340 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		B5AF267F1C91EF4300366340 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B5AF26871C91FD0400366340 /* libSDL2_image.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libSDL2_image.a; path = lib/libSDL2_image.a; sourceTree = "<group>"; };
 		B5AF26881C91FD0400366340 /* libSDL2.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libSDL2.a; path = lib/libSDL2.a; sourceTree = "<group>"; };
@@ -1319,11 +1354,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B540021B1C9A08A500AC434D /* GameController.framework in Frameworks */,
 				B5C97F7F1C9709140049AF32 /* libz.tbd in Frameworks */,
 				B5AF2BC41C93B9CA00366340 /* MobileCoreServices.framework in Frameworks */,
 				B5AF2BC21C93B96400366340 /* ImageIO.framework in Frameworks */,
 				B5AF2BC01C93B8E200366340 /* UIKit.framework in Frameworks */,
-				B5AF2BBE1C93B8D600366340 /* GameController.framework in Frameworks */,
 				B5AF2BBC1C93B8CD00366340 /* CoreMotion.framework in Frameworks */,
 				B5AF2BB91C93B84B00366340 /* Foundation.framework in Frameworks */,
 				B5AF2BB71C93B83C00366340 /* OpenGLES.framework in Frameworks */,
@@ -1351,11 +1386,57 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B54001EA1C99D7ED00AC434D /* GLES2 */ = {
+			isa = PBXGroup;
+			children = (
+				B54001EB1C99D7ED00AC434D /* AttributeSetGLES2.cpp */,
+				B54001EC1C99D7ED00AC434D /* AttributeSetGLES2.hpp */,
+				B54001ED1C99D7ED00AC434D /* BlendGLES2.cpp */,
+				B54001EE1C99D7ED00AC434D /* BlendGLES2.hpp */,
+				B54001EF1C99D7ED00AC434D /* CanvasGLES2.cpp */,
+				B54001F01C99D7ED00AC434D /* CanvasGLES2.hpp */,
+				B54001F11C99D7ED00AC434D /* ClipScopeGLES2.cpp */,
+				B54001F21C99D7ED00AC434D /* ClipScopeGLES2.hpp */,
+				B54001F31C99D7ED00AC434D /* DisplayDeviceGLES2.cpp */,
+				B54001F41C99D7ED00AC434D /* DisplayDeviceGLES2.hpp */,
+				B54001F51C99D7ED00AC434D /* EffectsGLES2.cpp */,
+				B54001F61C99D7ED00AC434D /* EffectsGLES2.hpp */,
+				B54001F71C99D7ED00AC434D /* FboGLES2.cpp */,
+				B54001F81C99D7ED00AC434D /* FboGLES2.hpp */,
+				B54001F91C99D7ED00AC434D /* ScissorGLES2.cpp */,
+				B54001FA1C99D7ED00AC434D /* ScissorGLES2.hpp */,
+				B54001FB1C99D7ED00AC434D /* ShadersGLES2.cpp */,
+				B54001FC1C99D7ED00AC434D /* ShadersGLES2.hpp */,
+				B54001FD1C99D7ED00AC434D /* StencilScopeGLES2.cpp */,
+				B54001FE1C99D7ED00AC434D /* StencilScopeGLES2.hpp */,
+				B54001FF1C99D7ED00AC434D /* TextureGLES2.cpp */,
+				B54002001C99D7ED00AC434D /* TextureGLES2.hpp */,
+				B54002011C99D7ED00AC434D /* UniformBufferGLES2.cpp */,
+				B54002021C99D7ED00AC434D /* UniformBufferGLES2.hpp */,
+				B54002031C99D7ED00AC434D /* VGraphGLES2.cpp */,
+				B54002041C99D7ED00AC434D /* VGraphGLES2.hpp */,
+			);
+			path = GLES2;
+			sourceTree = "<group>";
+		};
+		B54002121C9A05BF00AC434D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B5AF267A1C91EF4300366340 /* Assets.xcassets */,
+				B5AF267F1C91EF4300366340 /* Info.plist */,
+				B54002151C9A080F00AC434D /* data */,
+				B54002161C9A080F00AC434D /* images */,
+				B54002171C9A080F00AC434D /* music */,
+				B54002131C9A05F500AC434D /* modules */,
+			);
+			name = Resources;
+			sourceTree = "<group>";
+		};
 		B5AF26631C91EF4300366340 = {
 			isa = PBXGroup;
 			children = (
-				B5AF266E1C91EF4300366340 /* Anura */,
-				B5AF26901C92015B00366340 /* src */,
+				B54002121C9A05BF00AC434D /* Resources */,
+				B5AF26901C92015B00366340 /* Sources */,
 				B5AF268B1C91FD0D00366340 /* Libraries */,
 				B5AF266D1C91EF4300366340 /* Products */,
 			);
@@ -1369,25 +1450,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		B5AF266E1C91EF4300366340 /* Anura */ = {
-			isa = PBXGroup;
-			children = (
-				B5AF2BC51C947B5900366340 /* glew.c */,
-				B5AF266F1C91EF4300366340 /* AppDelegate.swift */,
-				B5AF26711C91EF4300366340 /* Shader.fsh */,
-				B5AF26731C91EF4300366340 /* Shader.vsh */,
-				B5AF26751C91EF4300366340 /* GameViewController.swift */,
-				B5AF26771C91EF4300366340 /* Main.storyboard */,
-				B5AF267A1C91EF4300366340 /* Assets.xcassets */,
-				B5AF267C1C91EF4300366340 /* LaunchScreen.storyboard */,
-				B5AF267F1C91EF4300366340 /* Info.plist */,
-			);
-			name = Anura;
-			sourceTree = "<group>";
-		};
 		B5AF268B1C91FD0D00366340 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
+				B5AF2BC51C947B5900366340 /* glew.c */,
 				B5AF2BA21C92413100366340 /* libboost_date_time.a */,
 				B5AF2BA31C92413100366340 /* libboost_filesystem.a */,
 				B5AF2BA41C92413100366340 /* libboost_iostreams.a */,
@@ -1419,7 +1485,7 @@
 			name = Libraries;
 			sourceTree = "<group>";
 		};
-		B5AF26901C92015B00366340 /* src */ = {
+		B5AF26901C92015B00366340 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				B5AF26911C92015B00366340 /* achievements.cpp */,
@@ -1861,7 +1927,7 @@
 				B5AF29BF1C92015F00366340 /* wml_formula_callable.hpp */,
 				B5AF29C01C92015F00366340 /* xhtml */,
 			);
-			name = src;
+			name = Sources;
 			path = ../src;
 			sourceTree = "<group>";
 		};
@@ -2176,6 +2242,7 @@
 				B5AF28541C92015D00366340 /* Frustum.hpp */,
 				B5AF28551C92015D00366340 /* geometry.hpp */,
 				B5AF28561C92015D00366340 /* geometry.inl */,
+				B54001EA1C99D7ED00AC434D /* GLES2 */,
 				B5AF28571C92015D00366340 /* Gradients.cpp */,
 				B5AF28581C92015D00366340 /* Gradients.hpp */,
 				B5AF28591C92015D00366340 /* LightObject.cpp */,
@@ -2441,14 +2508,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B5AF26851C91F1CA00366340 /* Main.storyboard in Resources */,
-				B5AF26861C91F1CA00366340 /* LaunchScreen.storyboard in Resources */,
+				B54002191C9A080F00AC434D /* images in Resources */,
 				B5AF2A8B1C92015F00366340 /* SConscript in Resources */,
-				B5AF26741C91EF4300366340 /* Shader.vsh in Resources */,
+				B54002141C9A05F500AC434D /* modules in Resources */,
+				B54002181C9A080F00AC434D /* data in Resources */,
+				B540021A1C9A080F00AC434D /* music in Resources */,
 				B5AF2ADB1C92015F00366340 /* geometry.inl in Resources */,
 				B5AF267B1C91EF4300366340 /* Assets.xcassets in Resources */,
 				B5AF2A681C92015F00366340 /* FILEFORMAT in Resources */,
-				B5AF26721C91EF4300366340 /* Shader.fsh in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2459,6 +2526,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B54002061C99D7ED00AC434D /* BlendGLES2.cpp in Sources */,
 				B5AF2AE71C92015F00366340 /* RenderTarget.cpp in Sources */,
 				B5AF2A0E1C92015F00366340 /* b2CollideCircle.cpp in Sources */,
 				B5AF2AF31C92015F00366340 /* SurfaceBlur.cpp in Sources */,
@@ -2508,6 +2576,7 @@
 				B5AF2AC01C92015F00366340 /* key_button.cpp in Sources */,
 				B5AF2AE01C92015F00366340 /* ParticleSystemAffectors.cpp in Sources */,
 				B5AF2B511C92015F00366340 /* svg_utils.cpp in Sources */,
+				B540020C1C99D7ED00AC434D /* ScissorGLES2.cpp in Sources */,
 				B5AF2B221C92015F00366340 /* player_info.cpp in Sources */,
 				B5AF2A041C92015F00366340 /* asserts.cpp in Sources */,
 				B5AF2B671C92015F00366340 /* tooltip.cpp in Sources */,
@@ -2577,6 +2646,7 @@
 				B5AF2A8E1C92015F00366340 /* external_text_editor.cpp in Sources */,
 				B5AF2B161C92015F00366340 /* multi_tile_pattern.cpp in Sources */,
 				B5AF2A4F1C92015F00366340 /* custom_object_functions.cpp in Sources */,
+				B540020D1C99D7ED00AC434D /* ShadersGLES2.cpp in Sources */,
 				B5AF2B281C92015F00366340 /* progress_bar.cpp in Sources */,
 				B5AF2B3C1C92015F00366340 /* speech_dialog.cpp in Sources */,
 				B5AF2B181C92015F00366340 /* multiplayer_server.cpp in Sources */,
@@ -2653,9 +2723,11 @@
 				B5AF2A381C92015F00366340 /* b2WeldJoint.cpp in Sources */,
 				B5AF2AC41C92015F00366340 /* BlendModeScope.cpp in Sources */,
 				B5AF2AAF1C92015F00366340 /* hex_logical_tiles.cpp in Sources */,
+				B54002111C99D7ED00AC434D /* VGraphGLES2.cpp in Sources */,
 				B5AF2A781C92015F00366340 /* llex.cpp in Sources */,
 				B5AF2A6E1C92015F00366340 /* lcorolib.cpp in Sources */,
 				B5AF2A1B1C92015F00366340 /* b2Math.cpp in Sources */,
+				B540020E1C99D7ED00AC434D /* StencilScopeGLES2.cpp in Sources */,
 				B5AF2A881C92015F00366340 /* lundump.cpp in Sources */,
 				B5AF2B451C92015F00366340 /* surface_utils.cpp in Sources */,
 				B5AF2AE11C92015F00366340 /* ParticleSystemEmitters.cpp in Sources */,
@@ -2664,6 +2736,7 @@
 				B5AF2B9A1C92015F00366340 /* xhtml_node.cpp in Sources */,
 				B5AF2A521C92015F00366340 /* debug_console.cpp in Sources */,
 				B5AF2B621C92015F00366340 /* thread.cpp in Sources */,
+				B540020A1C99D7ED00AC434D /* EffectsGLES2.cpp in Sources */,
 				B5AF2B651C92015F00366340 /* tmx_reader.cpp in Sources */,
 				B5AF2A111C92015F00366340 /* b2Collision.cpp in Sources */,
 				B5AF2B7F1C92015F00366340 /* weather_particle_system.cpp in Sources */,
@@ -2672,6 +2745,7 @@
 				B5AF2A831C92015F00366340 /* ltable.cpp in Sources */,
 				B5AF2A451C92015F00366340 /* color_picker.cpp in Sources */,
 				B5AF2B6D1C92015F00366340 /* utility_query.cpp in Sources */,
+				B54002081C99D7ED00AC434D /* ClipScopeGLES2.cpp in Sources */,
 				B5AF2B8A1C92015F00366340 /* css_stylesheet.cpp in Sources */,
 				B5AF2A8C1C92015F00366340 /* test_persist.cpp in Sources */,
 				B5C97F851C9711720049AF32 /* code_editor_dialog.cpp in Sources */,
@@ -2705,13 +2779,16 @@
 				B5AF2B111C92015F00366340 /* main.cpp in Sources */,
 				B5AF2A271C92015F00366340 /* b2CircleContact.cpp in Sources */,
 				B5AF2A181C92015F00366340 /* b2PolygonShape.cpp in Sources */,
+				B54002101C99D7ED00AC434D /* UniformBufferGLES2.cpp in Sources */,
 				B5AF2A9B1C92015F00366340 /* formula_function_registry.cpp in Sources */,
 				B5AF2AFD1C92015F00366340 /* VGraphCairo.cpp in Sources */,
+				B54002091C99D7ED00AC434D /* DisplayDeviceGLES2.cpp in Sources */,
 				B5AF2A7A1C92015F00366340 /* lmem.cpp in Sources */,
 				B5AF2A3A1C92015F00366340 /* b2Rope.cpp in Sources */,
 				B5AF2B391C92015F00366340 /* slider.cpp in Sources */,
 				B5AF2B551C92015F00366340 /* tbs_client.cpp in Sources */,
 				B5AF2B981C92015F00366340 /* xhtml_line_box.cpp in Sources */,
+				B540020B1C99D7ED00AC434D /* FboGLES2.cpp in Sources */,
 				B5AF2B151C92015F00366340 /* module_web_server.cpp in Sources */,
 				B5AF2B8B1C92015F00366340 /* css_transition.cpp in Sources */,
 				B5AF29FF1C92015F00366340 /* animation_creator.cpp in Sources */,
@@ -2720,6 +2797,7 @@
 				B5C97F891C9711C20049AF32 /* poly_line_widget.cpp in Sources */,
 				B5AF2B4A1C92015F00366340 /* svg_gradient.cpp in Sources */,
 				B5AF2A9D1C92015F00366340 /* formula_interface.cpp in Sources */,
+				B540020F1C99D7ED00AC434D /* TextureGLES2.cpp in Sources */,
 				B5AF2B9F1C92015F00366340 /* xhtml_style_tree.cpp in Sources */,
 				B5AF2AA11C92015F00366340 /* formula_tokenizer.cpp in Sources */,
 				B5AF2A7B1C92015F00366340 /* loadlib.cpp in Sources */,
@@ -2817,10 +2895,10 @@
 				B5AF2A6B1C92015F00366340 /* lbaselib.cpp in Sources */,
 				B5AF2B401C92015F00366340 /* stats_server_main.cpp in Sources */,
 				B5AF2A6F1C92015F00366340 /* lctype.cpp in Sources */,
+				B54002071C99D7ED00AC434D /* CanvasGLES2.cpp in Sources */,
 				B5AF2B491C92015F00366340 /* svg_element.cpp in Sources */,
 				B5AF2B191C92015F00366340 /* normal_map.cpp in Sources */,
 				B5AF2B3F1C92015F00366340 /* stats_server.cpp in Sources */,
-				B5AF26761C91EF4300366340 /* GameViewController.swift in Sources */,
 				B5AF2B721C92015F00366340 /* variant_callable.cpp in Sources */,
 				B5AF2A901C92015F00366340 /* ffl_lib.cpp in Sources */,
 				B5AF2A441C92015F00366340 /* collision_utils.cpp in Sources */,
@@ -2838,8 +2916,8 @@
 				B5AF2A401C92015F00366340 /* checksum.cpp in Sources */,
 				B5AF2A551C92015F00366340 /* difficulty.cpp in Sources */,
 				B5AF2A3D1C92015F00366340 /* cairo.cpp in Sources */,
+				B54002051C99D7ED00AC434D /* AttributeSetGLES2.cpp in Sources */,
 				B5AF2B761C92015F00366340 /* VoronoiDiagramGenerator.cpp in Sources */,
-				B5AF26701C91EF4300366340 /* AppDelegate.swift in Sources */,
 				B5AF2B921C92015F00366340 /* xhtml_border_info.cpp in Sources */,
 				B5AF2A0F1C92015F00366340 /* b2CollideEdge.cpp in Sources */,
 				B5AF2A811C92015F00366340 /* lstring.cpp in Sources */,
@@ -2850,25 +2928,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXVariantGroup section */
-		B5AF26771C91EF4300366340 /* Main.storyboard */ = {
-			isa = PBXVariantGroup;
-			children = (
-				B5AF26781C91EF4300366340 /* Base */,
-			);
-			name = Main.storyboard;
-			sourceTree = "<group>";
-		};
-		B5AF267C1C91EF4300366340 /* LaunchScreen.storyboard */ = {
-			isa = PBXVariantGroup;
-			children = (
-				B5AF267D1C91EF4300366340 /* Base */,
-			);
-			name = LaunchScreen.storyboard;
-			sourceTree = "<group>";
-		};
-/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		B5AF26801C91EF4300366340 /* Debug */ = {
@@ -2901,6 +2960,7 @@
 					"DEBUG=1",
 					"$(inherited)",
 					"NO_EDITOR=1",
+					__IPHONEOS__,
 				);
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
@@ -2941,7 +3001,10 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_PREPROCESSOR_DEFINITIONS = "NO_EDITOR=1";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NO_EDITOR=1",
+					__IPHONEOS__,
+				);
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
