@@ -49,7 +49,7 @@ class Level;
 class pc_character;
 class PlayerInfo;
 
-typedef boost::intrusive_ptr<character> CharacterPtr;
+typedef ffl::IntrusivePtr<character> CharacterPtr;
 
 class Entity : public game_logic::WmlSerializableFormulaCallable
 {
@@ -73,7 +73,7 @@ public:
 	virtual const PlayerInfo* isHuman() const { return nullptr; }
 	virtual PlayerInfo* isHuman() { return nullptr; }
 	virtual void process(Level& lvl);
-	virtual bool executeCommand(const variant& var) = 0;
+	virtual bool executeCommand(const variant& var) override = 0;
 
 	const std::string& label() const { return label_; }
 	void setLabel(const std::string& lb) { label_ = lb; }
@@ -88,7 +88,6 @@ public:
 
 	void setCentiX(int x) { x_ = x; calculateSolidRect(); }
 	void setCentiY(int y) { y_ = y; calculateSolidRect(); }
-	virtual void setZSubOrder(const int zsub_order) = 0;
 
 	int x() const { return x_/100 - (x_ < 0 && x_%100 ? 1 : 0); }
 	int y() const { return y_/100 - (y_ < 0 && y_%100 ? 1 : 0); }
@@ -96,8 +95,13 @@ public:
 	virtual int parallaxScaleMillisX() const { return 1000;}
 	virtual int parallaxScaleMillisY() const { return 1000;}
 		
-	virtual int zorder() const { return 0; }
-	virtual int zSubOrder() const { return 0; }
+	int zorder() const { return zorder_; }
+	int zSubOrder() const { return zsub_order_; }
+
+	void setZOrder(int z) { zorder_ = z; }
+	void setZSubOrder(int z) { zsub_order_ = z; }
+
+	public:
 
 	virtual const std::pair<int,int>* parallaxScaleMillis() const { return 0; }
 
@@ -156,8 +160,9 @@ public:
 	virtual void setUpsideDown(bool facing);
 
 	decimal rotate_z_;
-	virtual decimal getRotateZ() const { return rotate_z_; }
-	virtual void setRotateZ(float new_rotate_z);
+	decimal getRotateZ() const { return rotate_z_; }
+	void setRotateZ(decimal new_rotate_z) { rotate_z_ = new_rotate_z; }
+	void setRotateZ(float new_rotate_z);
 	
 	virtual decimal getDrawScale() const { return decimal(1.0); };
 	virtual void setDrawScale(float new_scale);
@@ -201,7 +206,7 @@ public:
 	virtual void boardVehicle() {}
 	virtual void unboardVehicle() {}
 
-	virtual void setSoundVolume(const int volume) = 0;
+	virtual void setSoundVolume(float volume, float nseconds=0.0) = 0;
 	virtual int weight() const { return 1; }
 	
 	virtual int mass() const = 0;
@@ -240,8 +245,11 @@ public:
 	virtual void mapEntities(const std::map<EntityPtr, EntityPtr>& m) {}
 	virtual void cleanup_references() {}
 
+	void addEndAnimCommand(variant cmd);
+	std::vector<variant> popEndAnimCommands();
+
 	void addScheduledCommand(int cycle, variant cmd);
-	std::vector<variant> popScheduledCommands();
+	std::vector<variant> popScheduledCommands(bool* is_debug=nullptr);
 
 	virtual void saveGame() {}
 
@@ -293,8 +301,6 @@ public:
 	void setSpawnedBy(const std::string& key);
 	const std::string& wasSpawnedBy() const;
 
-	virtual bool isMouseEventSwallowed() const {return false;}
-
 	bool isMouseOverEntity() const { return mouse_over_entity_; }
 	void setMouseOverEntity(bool val=true) { mouse_over_entity_=val; }
 	void setMouseButtons(uint8_t buttons) { mouse_button_state_ = buttons; }
@@ -312,7 +318,7 @@ public:
 
 	virtual bool useAbsoluteScreenCoordinates() const = 0;
 
-	virtual void beingRemoved() = 0;
+	virtual void beingRemoved();
 	virtual void beingAdded() = 0;
 
 	int getMouseoverDelay() const { return mouseover_delay_; }
@@ -327,6 +333,12 @@ public:
 
 	decimal getAnchorX() const;
 	decimal getAnchorY() const;
+
+	//Get the slot for a named attribute so we can quickly look it
+	//up using queryValueBySlot()
+	virtual int getValueSlot(const std::string& key) const = 0;
+
+	int currentRotation() const { return rotate_z_.as_int(); }
 
 protected:
 	virtual ConstSolidInfoPtr calculateSolid() const = 0;
@@ -352,16 +364,17 @@ protected:
 
 	virtual void control(const Level& lvl) = 0;
 
-	variant serializeToWml() const { return write(); }
+	variant serializeToWml() const override { return write(); }
 
 	int getPrevFeetX() const { return prev_feet_x_; }
 	int getPrevFeetY() const { return prev_feet_y_; }
 
+	virtual bool editorOnly() const { return false; }
+
 protected:
-	void surrenderReferences(GarbageCollector* collector);
+	void surrenderReferences(GarbageCollector* collector) override;
 
 private:
-	virtual int currentRotation() const = 0;
 
 	std::string label_;
 
@@ -372,6 +385,8 @@ private:
 
 	int prev_feet_x_, prev_feet_y_;
 	int last_move_x_, last_move_y_;
+
+	int zorder_, zsub_order_;
 
 	bool face_right_;
 	bool upside_down_;
@@ -392,7 +407,15 @@ private:
 
 	CurrentGeneratorPtr current_generator_;
 
-	typedef std::pair<int, variant> ScheduledCommand;
+	struct ScheduledCommand
+	{
+		ScheduledCommand(int nt=0, const variant& c=variant()) : cmd(c), t(nt), is_debug(false)
+		{}
+		variant cmd;
+		int t;
+		bool is_debug;
+	};
+
 	std::vector<ScheduledCommand> scheduled_commands_;
 
 	bool controls_[controls::NUM_CONTROLS];	
@@ -423,5 +446,19 @@ private:
 bool zorder_compare(const EntityPtr& e1, const EntityPtr& e2);	
 struct EntityZOrderCompare
 {
-	bool operator()(const EntityPtr& lhs, const EntityPtr& rhs);
+
+	bool reverse_;
+	EntityZOrderCompare();
+	bool operator()(const EntityPtr& a, const EntityPtr& b) const {
+	if(reverse_){
+		return a->zorder() < b->zorder() ||
+			(a->zorder() == b->zorder() && a->zSubOrder() < b->zSubOrder()) ||
+			(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y < b->getMidpoint().y) ||
+			(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y == b->getMidpoint().y && a.get() < b.get());		
+	}
+		return a->zorder() < b->zorder() ||
+		(a->zorder() == b->zorder() && a->zSubOrder() < b->zSubOrder()) ||
+		(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y > b->getMidpoint().y) ||
+		(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y == b->getMidpoint().y && a.get() > b.get());
+	}
 };

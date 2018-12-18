@@ -55,6 +55,8 @@ namespace gui
 		void setFormula(bool val=true) { is_formula_ = true; }
 
 		WidgetPtr clone() const override;
+
+		void changeFontSize(int amount) override;
 	private:
 		ObjectInfo getObjectAt(int row, int col) const;
 
@@ -94,5 +96,5 @@ namespace gui
 		bool is_formula_;
 	};
 
-	typedef boost::intrusive_ptr<CodeEditorWidget> CodeEditorWidgetPtr;
+	typedef ffl::IntrusivePtr<CodeEditorWidget> CodeEditorWidgetPtr;
 }

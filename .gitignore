@@ -67,6 +67,11 @@ compiled/
 modules/*
 !modules/icons
 !modules/lib_2d
+!modules/gui
+!modules/tbs
+
+#Ignore this, don't know why it's being created for me.
+imgui.ini
 
 MacOS/include
 MacOS/lib
@@ -75,3 +80,5 @@ project.xcworkspace
 sdk/
 build-x64/
 build-Win32/
+anura.kdev4
+.kdev4/

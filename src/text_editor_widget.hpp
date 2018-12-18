@@ -23,14 +23,14 @@
 
 #pragma once
 
-#include <boost/intrusive_ptr.hpp>
+#include "intrusive_ptr.hpp"
 
 #include "scrollable_widget.hpp"
 
 namespace gui 
 {
 	class TextEditorWidget;
-	typedef boost::intrusive_ptr<TextEditorWidget> TextEditorWidgetPtr;
+	typedef ffl::IntrusivePtr<TextEditorWidget> TextEditorWidgetPtr;
 
 	class TextEditorWidget : public ScrollableWidget
 	{
@@ -44,7 +44,7 @@ namespace gui
 
 		int getFontSize() const { return font_size_; }
 		void setFontSize(int font_size);
-		void changeFontSize(int amount);
+		virtual void changeFontSize(int amount);
 
 		virtual void setDim(int w, int h) override;
 
@@ -80,6 +80,8 @@ namespace gui
 		void setOnTabHandler(std::function<void()> fn) { on_tab_ = fn; }
 		void setOnEscHandler(std::function<void()> fn) { on_escape_ = fn; }
 		void setOnChangeFocusHandler(std::function<void(bool)> fn) { on_change_focus_ = fn; }
+
+		void setSelectAllHandler(std::function<std::pair<int,int>(std::string)> fn) { on_select_all_fn_ = fn; }
 
 		bool hasFocus() const override { return has_focus_; }
 		void setFocus(bool value) override;
@@ -133,7 +135,7 @@ namespace gui
 		bool handleTextEditing(const SDL_TextEditingEvent& event);
 
 		void handlePaste(std::string txt);
-		void handleCopy(bool mouse_based=false);
+		void handleCopy();
 
 		virtual KRE::Color getCharacterColor(size_t row, size_t col) const;
 
@@ -190,6 +192,8 @@ namespace gui
 		std::function<void(bool)> on_change_focus_;
 		std::function<bool()> onBeginEnter_;
 
+		std::function<std::pair<int,int>(std::string)> on_select_all_fn_;
+
 		void changeDelegate();
 		void moveCursorDelegate();
 		void enterDelegate();
@@ -205,6 +209,8 @@ namespace gui
 		game_logic::FormulaPtr ffl_on_escape_;
 		game_logic::FormulaPtr ffl_on_change_focus_;
 		game_logic::FormulaPtr ffl_onBeginEnter_;
+
+		variant ffl_fn_filter_paste_;
 
 		bool begin_enter_return_;
 

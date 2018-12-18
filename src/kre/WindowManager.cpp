@@ -35,6 +35,11 @@
 #include "SDL_image.h"
 #include "WindowManager.hpp"
 
+#ifdef USE_IMGUI
+#include "imgui.h"
+#include "imgui_impl_sdl_gl3.h"
+#endif
+
 namespace KRE
 {
 	namespace 
@@ -82,7 +87,11 @@ namespace KRE
 			  renderer_(nullptr),
 			  context_(nullptr),
 			  nonfs_width_(width),
-			  nonfs_height_(height)
+			  nonfs_height_(height),
+			  request_major_version_(2),
+			  request_minor_version_(1),
+			  profile_(ProfileValue::COMPAT),
+			  new_frame_(0)
 		{
 			if(hints.has_key("renderer")) {
 				if(hints["renderer"].is_string()) {
@@ -103,6 +112,24 @@ namespace KRE
 			} else {
 				SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");
 			}
+
+			if(hints.has_key("version")) {
+				const int version = hints["version"].as_int32();
+				request_major_version_ = version / 100;
+				request_minor_version_ = version % 100;
+			}
+			if(hints.has_key("profile")) {
+				const std::string profile = hints["profile"].as_string();
+				if(profile == "compatibility" || profile == "compat") {
+					profile_ = ProfileValue::COMPAT;
+				} else if(profile == "core") {
+					profile_ = ProfileValue::CORE;
+				} else if(profile == "es" || profile == "ES") {
+					profile_ = ProfileValue::ES;
+				} else {
+					LOG_ERROR("Unrecognized profile setting '" << profile << "' defaulting to compatibility.");
+				}
+			}
 		}
 
 		void createWindow() override {
@@ -121,10 +148,34 @@ namespace KRE
 				// We need to do extra SDL set-up for an OpenGL context.
 				// Since these parameter's need to be set-up before context
 				// creation.
-				SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-				SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-				SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-				SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+				int err;
+				err = SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, request_major_version_);
+				if(err) {
+					LOG_ERROR("Setting major OpenGL context version to " << request_major_version_ << ": " << SDL_GetError());
+				}
+				err = SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, request_minor_version_);
+				if(err) {
+					LOG_ERROR("Setting minor OpenGL context version to " << request_minor_version_ << ": " << SDL_GetError());
+				}
+				SDL_GLprofile prof;
+				switch(profile_) {
+					case ProfileValue::COMPAT:	prof = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY; break;
+					case ProfileValue::CORE:	prof = SDL_GL_CONTEXT_PROFILE_CORE; break;
+					case ProfileValue::ES:		prof = SDL_GL_CONTEXT_PROFILE_ES; break;
+					default: prof = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
+				}
+				err = SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, prof);
+				if(err) {
+					LOG_ERROR("Setting major OpenGL profile mask to " << prof << ": " << SDL_GetError());
+				}
+				err = SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+				if(err) {
+					LOG_ERROR("Setting major OpenGL depth to 24: " << SDL_GetError());
+				}
+				err = SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+				if(err) {
+					LOG_ERROR("Setting major OpenGL stencil size to 8: " << SDL_GetError());
+				}
 				if(use16bpp()) {
 					SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 5);
 					SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 5);
@@ -206,6 +257,9 @@ namespace KRE
 				break;
 			}
 			window_.reset(SDL_CreateWindow(getTitle().c_str(), x, y, w, h, wnd_flags), [&](SDL_Window* wnd){
+#ifdef USE_IMGUI
+				ImGui_ImplSdlGL3_Shutdown();
+#endif
 				if(getDisplayDevice()->ID() != DisplayDevice::DISPLAY_DEVICE_SDL) {
 					SDL_DestroyRenderer(renderer_);
 				}
@@ -217,13 +271,19 @@ namespace KRE
 				SDL_DestroyWindow(wnd);
 			});
 
+#ifdef USE_IMGUI
+			ImGui_ImplSdlGL3_Init(window_.get());
+#endif
+
+			ASSERT_LOG(window_.get() != nullptr, "Could not create window: " << x << ", " << y << ", " << w << ", " << h << " / wnd_flags = " << wnd_flags);
+
 			if(getDisplayDevice()->ID() != DisplayDevice::DISPLAY_DEVICE_SDL) {
 				Uint32 rnd_flags = SDL_RENDERER_ACCELERATED;
 				if(vSync()) {
 					rnd_flags |= SDL_RENDERER_PRESENTVSYNC;
 				}
 				renderer_ = SDL_CreateRenderer(window_.get(), -1, rnd_flags);
-				ASSERT_LOG(renderer_ != nullptr, "Failed to create renderer: " << SDL_GetError());				
+				ASSERT_LOG(renderer_ != nullptr, "Failed to create renderer: " << SDL_GetError() << "; Windows details: " << w << "x" << h << " wnd_flags = " << wnd_flags);				
 			}
 
 			ASSERT_LOG(window_ != nullptr, "Failed to create window: " << SDL_GetError());
@@ -235,8 +295,9 @@ namespace KRE
 			getDisplayDevice()->init(width(), height());
 			getDisplayDevice()->printDeviceInfo();
 
-			getDisplayDevice()->setClearColor(clear_color_);
-			getDisplayDevice()->clear(ClearFlags::ALL);
+			clear(ClearFlags::ALL);
+			//getDisplayDevice()->setClearColor(clear_color_);
+			//getDisplayDevice()->clear(ClearFlags::ALL);
 			swap();
 		}
 
@@ -244,17 +305,37 @@ namespace KRE
 			window_.reset();
 		}
 
+		void setVisible(bool visible) override {
+			if(visible) {
+				SDL_ShowWindow(window_.get());
+			} else {
+				SDL_HideWindow(window_.get());
+			}
+		}
+
 		void clear(ClearFlags f) override {
 			// N.B. Clear color is global GL state, so we need to re-configure it everytime we clear.
 			// Since it may have changed by some sneaky render target user.
 			getDisplayDevice()->setClearColor(clear_color_);
 			getDisplayDevice()->clear(f);
+#ifdef USE_IMGUI
+			if(new_frame_ == 0) {
+				ImGui_ImplSdlGL3_NewFrame(window_.get());
+				++new_frame_;
+			}
+#endif
 		}
 
 		void swap() override {
 			// This is a little bit hacky -- ideally the display device should swap buffers.
 			// But SDL provides a device independent way of doing it which is really nice.
 			// So we use that.
+#ifdef USE_IMGUI
+			ImGui::Render();
+			if(--new_frame_ < 0) {
+				new_frame_ = 0;
+			}
+#endif
 			if(getDisplayDevice()->ID() == DisplayDevice::DISPLAY_DEVICE_OPENGL || getDisplayDevice()->ID() == DisplayDevice::DISPLAY_DEVICE_OPENGLES) {
 				SDL_GL_SwapWindow(window_.get());
 			} else {
@@ -415,6 +496,18 @@ namespace KRE
 		int nonfs_width_;
 		// Height of the window before changing to full-screen mode
 		int nonfs_height_;
+
+		int request_major_version_;
+		int request_minor_version_;
+
+		enum class ProfileValue {
+			COMPAT,
+			CORE,
+			ES,
+		};
+		ProfileValue profile_;
+
+		int new_frame_;
 
 		SDLWindow(const SDLWindow&);
 	};
@@ -642,7 +735,7 @@ namespace KRE
 	{
 		std::vector<WindowPtr> res;
 		auto it = get_window_list().begin();
-		for(auto w : get_window_list()) {
+		for(auto& w : get_window_list()) {
 			res.emplace_back(w.second.lock());
 		}
 		return res;

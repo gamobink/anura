@@ -30,6 +30,7 @@
 #include "Canvas.hpp"
 #include "Font.hpp"
 #include "ModelMatrixScope.hpp"
+#include "RenderTarget.hpp"
 #include "WindowManager.hpp"
 
 #include "asserts.hpp"
@@ -149,8 +150,8 @@ bool update_camera_position(const Level& lvl, screen_position& pos, const Entity
 	//screen position being initialized now.
 	const bool draw_level = doDraw && pos.init;
 	
-	const int screen_width = graphics::GameScreen::get().getWidth();
-	const int screen_height = graphics::GameScreen::get().getHeight();
+	const int screen_width = graphics::GameScreen::get().getVirtualWidth();
+	const int screen_height = graphics::GameScreen::get().getVirtualHeight();
 
 	ASSERT_LOG(focus || lvl.in_editor(), "No player found in level. Must have a player object. (An object with is_human: true marked");
 
@@ -166,7 +167,7 @@ bool update_camera_position(const Level& lvl, screen_position& pos, const Entity
 		}
         
         //if we've set the zoom inside the very first cycle of a level (i.e. using on_start_level), then we're doing some kind of cutscene which has the camera start zoomed out.  We want the camera to immediately start in this state, not "progress to this state gradually from the normal zoom". 
-        if(lvl.cycle() == 1){
+        if(lvl.instant_zoom_level_set() || lvl.cycle() == 1){
             pos.zoom = target_zoom;
         }
 
@@ -178,9 +179,9 @@ bool update_camera_position(const Level& lvl, screen_position& pos, const Entity
 		//find how much padding will have to be on the edge of the screen due
 		//to the level being wider than the screen. This value will be 0
 		//if the level is larger than the screen (i.e. most cases)
-		const int x_screen_pad = std::max<int>(0, screen_width - lvl.boundaries().w());
+		const int x_screen_pad = lvl.constrain_camera() ? std::max<int>(0, screen_width - lvl.boundaries().w()) : 0;
 
-		const int y_screen_pad = std::max<int>(0, screen_height - lvl.boundaries().h());
+		const int y_screen_pad = lvl.constrain_camera() ? std::max<int>(0, screen_height - lvl.boundaries().h()) : 0;
 		pos.x_border = x_screen_pad / 2;
 		pos.y_border = y_screen_pad / 2;
 
@@ -347,8 +348,13 @@ bool update_camera_position(const Level& lvl, screen_position& pos, const Entity
 			min_y = max_y = (min_y + max_y)/2;
 		}
 
-		pos.x = std::min(std::max(pos.x_pos, min_x), max_x);
-		pos.y = std::min(std::max(pos.y_pos, min_y), max_y);
+		if (lvl.constrain_camera()) {
+			pos.x = std::min(std::max(pos.x_pos, min_x), max_x);
+			pos.y = std::min(std::max(pos.y_pos, min_y), max_y);
+		} else {
+			pos.x = pos.x_pos;
+			pos.y = pos.y_pos;
+		}
 	}
 
 	last_position = pos;
@@ -358,17 +364,35 @@ bool update_camera_position(const Level& lvl, screen_position& pos, const Entity
 
 void render_scene(Level& lvl, const screen_position& pos) 
 {
+	auto& gs = graphics::GameScreen::get();
+
+	const int screen_width = gs.getVirtualWidth();
+	const int screen_height = gs.getVirtualHeight();
+
+	const bool need_rt = gs.getVirtualWidth() != gs.getWidth() || gs.getVirtualHeight() != gs.getHeight();
+
+	static KRE::RenderTargetPtr rt;
+	
+	if(need_rt && (!rt || rt->width() != screen_width || rt->height() != screen_height)) {
+		rt = (KRE::RenderTarget::create(screen_width, screen_height, 1, false, false));
+		rt->setBlendState(false);
+	}
+
+	if(rt && need_rt) {
+		rt->renderToThis(rect(0,0,screen_width,screen_height));
+		rt->setClearColor(KRE::Color(0,0,0,255));
+		rt->clear();
+
+	}
+
 	auto wnd = KRE::WindowManager::getMainWindow();
 	auto canvas = KRE::Canvas::getInstance();
 
-	auto& gs = graphics::GameScreen::get();
-	const int screen_width = gs.getWidth();
-	const int screen_height = gs.getHeight();
-
 	graphics::GameScreen::Manager screen_manager(wnd);
-	KRE::ModelManager2D model(gs.x(), gs.y(), 0, glm::vec2(1.0f/gs.getScaleW(), 1.0f/gs.getScaleH()));
+	KRE::ModelManager2D model(gs.x(), gs.y(), 0, 1.0f); //glm::vec2(1.0f/gs.getScaleW(), 1.0f/gs.getScaleH()));
 
 	KRE::Canvas::CameraScope cam_scope(gs.getCurrentCamera());
+	KRE::Canvas::DimScope dim_scope(screen_width, screen_height);
 
 	const int camera_rotation = lvl.camera_rotation();
 	if(camera_rotation) {
@@ -381,10 +405,10 @@ void render_scene(Level& lvl, const screen_position& pos)
 		wnd->clear(KRE::ClearFlags::COLOR);
 
 		const double angle = sin(0.5f*static_cast<float>(M_PI*pos.flip_rotate)/1000.0f);
-		const int pixels = static_cast<int>((graphics::GameScreen::get().getWidth()/2)*angle);
+		const int pixels = static_cast<int>((graphics::GameScreen::get().getVirtualWidth()/2)*angle);
 		
 		//then squish all future drawing inwards
-		wnd->setViewPort(pixels, 0, graphics::GameScreen::get().getWidth() - pixels*2, graphics::GameScreen::get().getHeight());
+		wnd->setViewPort(pixels, 0, graphics::GameScreen::get().getVirtualWidth() - pixels*2, graphics::GameScreen::get().getVirtualHeight());
 		*/
 		ASSERT_LOG(false, "Fix pos.flip_rotate");
 	}
@@ -398,14 +422,17 @@ void render_scene(Level& lvl, const screen_position& pos)
 	xscroll += static_cast<int>((screen_width / 2) * (1.0f - 1.0f / pos.zoom));
 	yscroll += static_cast<int>((screen_height / 2) * (1.0f - 1.0f / pos.zoom));
 
+
+	float xdelta = 0.0f, ydelta = 0.0f;
 	if(pos.zoom < 1.0f) {
-		bg_xscroll = xscroll;
-		bg_yscroll = yscroll;
+		xdelta = bg_xscroll - xscroll;
+		ydelta = bg_yscroll - yscroll;
 	}
 
 	{
 		KRE::ModelManager2D model_matrix(-xscroll, -yscroll, 0, pos.zoom);
-		lvl.draw_background(bg_xscroll, bg_yscroll, camera_rotation);
+
+		lvl.draw_background(bg_xscroll, bg_yscroll, camera_rotation, xdelta, ydelta);
 
 		int draw_width = screen_width;
 		int draw_height = screen_height;
@@ -468,7 +495,7 @@ void render_scene(Level& lvl, const screen_position& pos)
 		lvl.draw_status();
 	}
 
-	if(scene_title_duration_ > 0) {
+	if(scene_title_duration_ > 0 && scene_title().empty() == false) {
 		--scene_title_duration_;
 		const ConstGraphicalFontPtr f = GraphicalFont::get("default");
 		ASSERT_LOG(f.get() != nullptr, "COULD NOT LOAD DEFAULT FONT");
@@ -549,6 +576,12 @@ void render_scene(Level& lvl, const screen_position& pos)
 #endif
 		glColor4ub(255, 255, 255, 255);
 		*/
+	}
+
+	if(need_rt && rt) {
+		rt->renderToPrevious();
+		rt->preRender(wnd);
+		wnd->render(rt.get());
 	}
 }
 

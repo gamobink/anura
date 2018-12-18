@@ -65,7 +65,7 @@ namespace editor_dialogs
 		void changeNumericProperty(const std::string& id, std::shared_ptr<numeric_widgets> w);
 		void changeNumericPropertySlider(const std::string& id, std::shared_ptr<numeric_widgets> w, float value);
 		void changeEnumProperty(const std::string& id);
-		void setEnumProperty(const std::string& id, const std::vector<std::string>& options, int index);
+		void setEnumProperty(const std::string& id, const std::vector<std::string>& options, int index, bool real_enum);
 
 		void changePointsProperty(const std::string& id);
 
@@ -82,7 +82,7 @@ namespace editor_dialogs
 		std::unique_ptr<assert_recover_scope> assert_recover_scope_;
 	};
 
-	typedef boost::intrusive_ptr<PropertyEditorDialog> PropertyEditorDialogPtr;
+	typedef ffl::IntrusivePtr<PropertyEditorDialog> PropertyEditorDialogPtr;
 }
 
 #endif // !NO_EDITOR

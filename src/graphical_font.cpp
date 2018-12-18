@@ -43,6 +43,8 @@ namespace
 	}
 }
 
+PREF_BOOL(enable_graphical_fonts, true, "Loads graphical fonts");
+
 void GraphicalFont::init(variant node)
 {
 	for(const variant& font_node : node["font"].as_list()) {
@@ -63,6 +65,7 @@ ConstGraphicalFontPtr GraphicalFont::get(const std::string& id)
 
 GraphicalFont::GraphicalFont(variant node)
   : id_(node["id"].as_string()), 
+    texture_file_(node["texture"].as_string()),
 	texture_(KRE::Texture::createTexture(node["texture"].as_string())),
     kerning_(node["kerning"].as_int(2))
 {
@@ -96,6 +99,17 @@ GraphicalFont::GraphicalFont(variant node)
 			                    current_rect.w(), current_rect.h());
 		}
 	}
+}
+
+const rect& GraphicalFont::get_codepoint_area(unsigned int codepoint) const
+{
+	auto itor = char_rect_map_.find(codepoint);
+	if(itor == char_rect_map_.end()) {
+		static rect result;
+		return result;
+	}
+
+	return itor->second;
 }
 
 rect GraphicalFont::draw(int x, int y, const std::string& text, int size, const KRE::Color& color) const
@@ -188,6 +202,10 @@ rect GraphicalFont::dimensions(const std::string& text, int size) const
 // Initialize the graphical font for the given locale
 void GraphicalFont::initForLocale(const std::string& locale) 
 {
+	if(!g_enable_graphical_fonts) {
+		return;
+	}
+
 	std::string names[] = {"base_fonts", "fonts"};
 	for(auto& name : names) {
 		std::string filename = "data/" + name + "." + locale + ".cfg";

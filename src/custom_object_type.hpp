@@ -45,6 +45,8 @@
 
 #include "ParticleSystemFwd.hpp"
 
+#define MAX_CUSTOM_OBJECT_SHADER_FLAGS 12
+
 class CustomObjectType;
 
 typedef std::shared_ptr<CustomObjectType> CustomObjectTypePtr;
@@ -61,10 +63,13 @@ namespace wml
 class CustomObjectType
 {
 public:
+	static void addObjectValidationFunction(const variant& str);
+
 	static void setPlayerVariantType(variant type_str);
 
 	static game_logic::FormulaCallableDefinitionPtr getDefinition(const std::string& id);
 	static bool isDerivedFrom(const std::string& base, const std::string& derived);
+	static bool isDerivedFrom(int base, int derived);
 	static variant mergePrototype(variant node, std::vector<std::string>* proto_paths=nullptr);
 	static const std::string* getObjectPath(const std::string& id);
 	static ConstCustomObjectTypePtr get(const std::string& id);
@@ -73,7 +78,10 @@ public:
 	static void invalidateObject(const std::string& id);
 	static void invalidateAllObjects();
 	static std::vector<ConstCustomObjectTypePtr> getAll();
-	static std::vector<std::string> getAllIds();
+	static std::vector<std::string> getAllIds(bool prototypes=false);
+	static const std::vector<std::string>& possibleIdsIncludingPrototypes();
+
+	static int getObjectTypeIndex(const std::string& id);
 
 	//a function which returns all objects that have an editor category
 	//mapped to the category they are in.
@@ -111,6 +119,7 @@ public:
 	ConstCustomObjectCallablePtr callableDefinition() const { return callable_definition_; }
 
 	const std::string& id() const { return id_; }
+	int numericId() const { return numeric_id_; }
 	int getHitpoints() const { return hitpoints_; }
 
 	int timerFrequency() const { return timerFrequency_; }
@@ -146,6 +155,7 @@ public:
 	bool isBodyHarmful() const { return body_harmful_; }
 	bool isBodyPassthrough() const { return body_passthrough_; }
 	bool hasIgnoreCollide() const { return ignore_collide_; }
+	bool editorOnly() const { return editor_only_; }
 
 #ifdef USE_BOX2D
 	box2d::body_ptr body() { return body_; }
@@ -227,6 +237,7 @@ public:
 	const std::vector<PropertyEntry>& getSlotProperties() const { return slot_properties_; }
 	const std::vector<const PropertyEntry*>& getVariableProperties() const { return variable_properties_; }
 	const std::vector<int>& getPropertiesWithInit() const { return properties_with_init_; }
+	const std::vector<int>& getPropertiesWithSetter() const { return properties_with_setter_; }
 	const std::vector<int>& getPropertiesRequiringInitialization() const { return properties_requiring_initialization_; }
 	const std::vector<int>& getPropertiesRequiringDynamicInitialization() const { return properties_requiring_dynamic_initialization_; }
 
@@ -284,11 +295,18 @@ public:
 	bool autoAnchor() const { return auto_anchor_; }
 
 	graphics::AnuraShaderPtr getShader() const { return shader_; }
+	graphics::AnuraShaderPtr getShaderWithParms(unsigned int flags) const;
 	const std::vector<graphics::AnuraShaderPtr>& getEffectsShaders() const { return effects_shaders_; }
+
+	const std::vector<const PropertyEntry*>& getShaderFlags() const { return shader_flags_; }
 
 	xhtml::DocumentObjectPtr getDocument() const { return document_; }
 
 	variant getParticleSystemDesc() const { return particle_system_desc_; }
+
+	const std::vector<std::string>& preloadObjects() const { return preload_objects_; }
+
+	const std::string& drawBatchID() const { return draw_batch_id_; }
 private:
 	void initSubObjects(variant node, const CustomObjectType* old_type);
 
@@ -299,6 +317,7 @@ private:
 	CustomObjectCallablePtr callable_definition_;
 
 	std::string id_;
+	int numeric_id_;
 	int hitpoints_;
 
 	int timerFrequency_;
@@ -327,6 +346,8 @@ private:
 	bool body_passthrough_;
 	bool ignore_collide_;
 	bool object_level_collisions_;
+
+	bool editor_only_;
 
 	int surface_friction_;
 	int surface_traction_;
@@ -367,7 +388,7 @@ private:
 	std::map<std::string, PropertyEntry> properties_;
 	std::vector<PropertyEntry> slot_properties_;
 	std::vector<const PropertyEntry*> variable_properties_;
-	std::vector<int> properties_with_init_, properties_requiring_initialization_, properties_requiring_dynamic_initialization_;
+	std::vector<int> properties_with_init_, properties_requiring_initialization_, properties_requiring_dynamic_initialization_, properties_with_setter_;
 	std::string last_initialization_property_;
 	int slot_properties_base_;
 
@@ -430,11 +451,20 @@ private:
 	mutable std::shared_ptr<lua::CompiledChunk> lua_compiled_;
 #endif
 
+	std::vector<const PropertyEntry*> shader_flags_;
+	variant shader_node_;
+
+	mutable std::vector<graphics::AnuraShaderPtr> shader_variants_;
+
 	graphics::AnuraShaderPtr shader_;
 	std::vector<graphics::AnuraShaderPtr> effects_shaders_;	
 
 	variant particle_system_desc_;	
 
+	std::vector<std::string> preload_objects_;
+
 	xhtml::DocumentObjectPtr document_;
+
+	std::string draw_batch_id_;
 };
 

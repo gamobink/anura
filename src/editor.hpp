@@ -36,7 +36,7 @@
 #include "preferences.hpp"
 #include "stats.hpp"
 
-static const int EDITOR_MENUBAR_HEIGHT = 0;
+static const int EDITOR_MENUBAR_HEIGHT = 40;
 static const int EDITOR_SIDEBAR_WIDTH = 220;
 
 namespace gui 
@@ -65,11 +65,17 @@ public:
 	EditorResolutionManager(int xres, int yres);
 	~EditorResolutionManager();
 	static bool isActive();
+
 private:
 	int original_width_, original_height_;
 };
 
-class editor
+class editor;
+
+typedef ffl::IntrusivePtr<editor> EditorPtr;
+typedef ffl::IntrusivePtr<const editor> ConstEditorPtr;
+
+class editor : public game_logic::FormulaCallable
 {
 public:
 	//A manager which should be scoped around creation of editors.
@@ -77,7 +83,7 @@ public:
 		~manager();
 	};
 
-	static editor* get_editor(const char* level_cfg);
+	static EditorPtr get_editor(const char* level_cfg);
 	rect   get_code_editor_rect();
 	static std::string last_edited_level();
 
@@ -89,8 +95,8 @@ public:
 
 	void setup_for_editing();
 
-	void process();
-	bool handleEvent(const SDL_Event& event, bool swallowed);
+	virtual void process() = 0;
+	virtual bool handleEvent(const SDL_Event& event, bool swallowed) = 0;
 	void handle_scrolling();
 	void handle_tracking_to_mouse();
 
@@ -132,11 +138,11 @@ public:
 		std::string help;
 
 		const EntityPtr& preview_object() const;
-		const boost::intrusive_ptr<const Frame>& preview_frame() const;
+		const ffl::IntrusivePtr<const Frame>& preview_frame() const;
 	
 	private:
 		mutable EntityPtr preview_object_;
-		mutable boost::intrusive_ptr<const Frame> preview_frame_;
+		mutable ffl::IntrusivePtr<const Frame> preview_frame_;
 		variant frame_info_;
 	};
 
@@ -237,7 +243,7 @@ public:
 	void begin_command_group();
 	void end_command_group();
 
-	void draw_gui() const;
+	virtual void draw_gui() const = 0;
 
 	//We are currently playing a level we are editing, and we want
 	//to reset it to its initial state.
@@ -259,7 +265,21 @@ public:
 
 	bool mouselook_mode() const { return mouselook_mode_; }
 
-private:
+	void add_new_sub_component();
+	void add_sub_component(int w, int h);
+	void remove_sub_component();
+
+	void add_sub_component_variations(int nsub, int delta);
+	void set_sub_component_area(int nsub, rect area);
+
+	void add_sub_component_usage(int nsub, rect area);
+	void set_sub_component_usage(std::vector<Level::SubComponentUsage> u);
+
+	void copy_rectangle(const rect& src, const rect& dst, std::vector<std::function<void()>>& redo, std::vector<std::function<void()>>& undo, bool copy_usages=false);
+
+	void clear_rectangle(const rect& area, std::vector<std::function<void()>>& redo, std::vector<std::function<void()>>& undo);
+
+protected:
 	editor(const editor&);
 	void operator=(const editor&);
 
@@ -277,7 +297,6 @@ private:
 
 	void process_ghost_objects();
 	void remove_ghost_objects();
-	void draw() const;
 	void draw_selection(int xoffset, int yoffset) const;
 
 	void add_tile_rect(int x1, int y1, int x2, int y2);
@@ -313,6 +332,8 @@ private:
 
 	void pencil_motion(int prev_x, int prev_y, int x, int y, bool left_button);
 
+	void on_modify_level();
+
 	LevelPtr lvl_;
 
 	std::vector<LevelPtr> levels_;
@@ -322,6 +343,9 @@ private:
 
 	// X and Y resolution of the editor, 0 means use default.
 	int xres_, yres_;
+
+	//track how much we're scheduled to move due to middle mouse button movement.
+	int middle_mouse_deltax_, middle_mouse_deltay_;
 
 	//if we are dragging an entity around, this marks the position from
 	//which the entity started the drag.
@@ -343,15 +367,15 @@ private:
 
 	tile_selection tile_selection_;
 
-	boost::intrusive_ptr<editor_menu_dialog> editor_menu_dialog_;
-	boost::intrusive_ptr<editor_mode_dialog> editor_mode_dialog_;
-	boost::intrusive_ptr<editor_dialogs::CharacterEditorDialog> character_dialog_;
-	boost::intrusive_ptr<editor_dialogs::EditorLayersDialog> layers_dialog_;
-	boost::intrusive_ptr<editor_dialogs::PropertyEditorDialog> property_dialog_;
-	boost::intrusive_ptr<editor_dialogs::TilesetEditorDialog> tileset_dialog_;
-	boost::intrusive_ptr<editor_dialogs::SegmentEditorDialog> segment_dialog_;
+	ffl::IntrusivePtr<editor_menu_dialog> editor_menu_dialog_;
+	ffl::IntrusivePtr<editor_mode_dialog> editor_mode_dialog_;
+	ffl::IntrusivePtr<editor_dialogs::CharacterEditorDialog> character_dialog_;
+	ffl::IntrusivePtr<editor_dialogs::EditorLayersDialog> layers_dialog_;
+	ffl::IntrusivePtr<editor_dialogs::PropertyEditorDialog> property_dialog_;
+	ffl::IntrusivePtr<editor_dialogs::TilesetEditorDialog> tileset_dialog_;
+	ffl::IntrusivePtr<editor_dialogs::SegmentEditorDialog> segment_dialog_;
 
-	boost::intrusive_ptr<CodeEditorDialog> code_dialog_;
+	ffl::IntrusivePtr<CodeEditorDialog> code_dialog_;
 
 	ExternalTextEditorPtr external_code_editor_;
 
@@ -392,6 +416,8 @@ private:
 	int prev_mousex_, prev_mousey_;
 
 	bool mouselook_mode_;
+
+	DECLARE_CALLABLE(editor);
 };
 
 #endif // !NO_EDITOR

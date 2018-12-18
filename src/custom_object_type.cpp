@@ -33,8 +33,11 @@
 #include "custom_object_type.hpp"
 #include "filesystem.hpp"
 #include "ffl_dom.hpp"
+#include "formatter.hpp"
 #include "formula.hpp"
 #include "formula_constants.hpp"
+#include "formula_function_registry.hpp"
+#include "formula_profiler.hpp"
 #include "json_parser.hpp"
 #include "level.hpp"
 #include "load_level.hpp"
@@ -53,6 +56,19 @@ using game_logic::FormulaCallableDefinition;
 using game_logic::FormulaCallableDefinitionPtr;
 
 PREF_BOOL(auto_anchor_objects, false, "Auto-anchors an object based on x/mid_x/x2 based on what attributes are set when spawning them.");
+
+
+static const std::string DefaultVertexShaderStr(
+    "uniform mat4 u_anura_mvp_matrix;\n"
+    "attribute vec4 a_anura_vertex;\n"
+	"attribute vec2 a_anura_texcoord;\n"
+	"varying vec2 v_texcoord;\n"
+	"void main()\n"
+	"{\n"
+		"v_texcoord = a_anura_texcoord;\n"
+		"gl_Position = u_anura_mvp_matrix * a_anura_vertex;\n"
+	"}\n"
+);
 
 // XXX make this a static function in CustomObjectType
 std::map<std::string, std::string>& prototype_file_paths() 
@@ -102,10 +118,17 @@ namespace
 		}
 	}
 
+	const std::string& prototype_path()
+	{
+		static const std::string value =  "data/object_prototypes";
+		return value;
+	}
+
 	void load_file_paths() 
 	{
 		//find out the paths to all our files
 		module::get_unique_filenames_under_dir(object_path(), &object_file_paths());
+		module::get_unique_filenames_under_dir("data/objects", &::prototype_file_paths());
 		module::get_unique_filenames_under_dir("data/object_prototypes", &::prototype_file_paths());
 	}
 
@@ -240,6 +263,7 @@ namespace
 		result[variant("vars")] = prototype_node["vars"] + node["vars"];
 		result[variant("consts")] = prototype_node["consts"] + node["consts"];
 		result[variant("variations")] = prototype_node["variations"] + node["variations"];
+		result[variant("types")] = prototype_node["types"] + node["types"];
 
 		const variant editor_info_a = prototype_node["editor_info"];
 		const variant editor_info_b = node["editor_info"];
@@ -287,14 +311,43 @@ namespace
 		variant node_events = node["events"];
 
 		if(proto_events.is_null() == false && node_events.is_null() == false) {
+			//merge prototype events into derived events
 			std::map<variant,variant> items = node_events.as_map();
 			for(auto p : proto_events.as_map()) {
 				auto itor = items.find(p.first);
 				if(itor == items.end()) {
 					items.insert(p);
 				} else {
-					variant key(variant(prototype_node["id"].as_string() + "_PROTO_" + p.first.as_string()));
-					items.insert(std::pair<variant,variant>(key, p.second));
+					variant orig = itor->second;
+					std::string appended = itor->second.as_string() + " ; " + p.second.as_string();
+					itor->second = variant(appended);
+					if(orig.get_debug_info()) {
+						itor->second.setDebugInfo(*orig.get_debug_info());
+					}
+				}
+			}
+
+			result[variant("events")] = variant(&items);
+		}
+
+		if(proto_events.is_null() && node_events.is_null() == false) {
+			//backwards compatible merging of events for when a prototype uses events: {}
+			//and the derived uses on_event
+			const std::map<variant,variant>& proto_attr = prototype_node.as_map();
+
+			std::map<variant,variant> items = node_events.as_map();
+			for(auto p : proto_attr) {
+				const std::string& s = p.first.as_string();
+				if(s.size() > 3 && std::equal(s.begin(), s.begin() + 3, "on_")) {
+					std::string key(s.begin()+3, s.end());
+					auto itor = items.find(variant(key));
+					if(itor != items.end()) {
+						variant orig = p.second;
+						std::string appended = orig.as_string() + " ; " + itor->second.as_string();
+						items[variant(key)] = variant(appended);
+
+						result.erase(p.first);
+					}
 				}
 			}
 
@@ -372,12 +425,72 @@ namespace
 		return instance;
 	}
 
+	std::vector<std::pair<int,int> >& ancestry_index()
+	{
+		static std::vector<std::pair<int,int> > instance;
+		return instance;
+	}
+
+	void add_inheritance_relationship(const std::string& child, const std::string& parent)
+	{
+		object_type_inheritance()[child] = parent;
+
+		ancestry_index().clear();
+		for(auto p : object_type_inheritance()) {
+			const int child_id = CustomObjectType::getObjectTypeIndex(p.first);
+
+			std::string parent = p.second;
+			const int parent_id = CustomObjectType::getObjectTypeIndex(parent);
+			ancestry_index().push_back(std::pair<int,int>(child_id, parent_id));
+			
+			auto itor = object_type_inheritance().find(parent);
+			while(itor != object_type_inheritance().end()) {
+				parent = itor->second;
+				const int parent_id = CustomObjectType::getObjectTypeIndex(parent);
+				ancestry_index().push_back(std::pair<int,int>(child_id, parent_id));
+				itor = object_type_inheritance().find(parent);
+			}
+		}
+
+		std::sort(ancestry_index().begin(), ancestry_index().end());
+
+	}
+
 	std::map<std::string, FormulaCallableDefinitionPtr>& object_type_definitions()
 	{
 		static std::map<std::string, FormulaCallableDefinitionPtr>* instance = new std::map<std::string, FormulaCallableDefinitionPtr>;
 		return *instance;
 	}
 
+}
+
+namespace {
+std::vector<variant> g_object_validation_functions;
+}
+
+void CustomObjectType::addObjectValidationFunction(const variant& str)
+{
+	game_logic::FormulaPtr f(new game_logic::Formula(str));
+	variant result(f->execute());
+
+	std::string fn_type = "function(map, [string])->string|null";
+	auto t = parse_variant_type(variant(fn_type));
+	ASSERT_LOG(t->match(result), "Object validation function must be of type " << fn_type);
+
+	g_object_validation_functions.push_back(result);
+}
+
+int CustomObjectType::getObjectTypeIndex(const std::string& id)
+{
+	static std::map<std::string, int>* m = new std::map<std::string, int>();
+	auto itor = m->find(id);
+	if(itor != m->end()) {
+		return itor->second;
+	} else {
+		int result = static_cast<int>(m->size())+1;
+		(*m)[id] = result;
+		return result;
+	}
 }
 
 bool CustomObjectType::isDerivedFrom(const std::string& base, const std::string& derived)
@@ -394,6 +507,15 @@ bool CustomObjectType::isDerivedFrom(const std::string& base, const std::string&
 	assert(itor->second != derived);
 
 	return isDerivedFrom(base, itor->second);
+}
+
+bool CustomObjectType::isDerivedFrom(int base, int derived)
+{
+	if(base == derived) {
+		return true;
+	}
+
+	return std::binary_search(ancestry_index().begin(), ancestry_index().end(), std::pair<int,int>(derived, base));
 }
 
 namespace {
@@ -417,7 +539,7 @@ void init_object_definition(variant node, const std::string& id_, CustomObjectCa
 		if(properties_node.is_string()) {
 			if(prototype_derived_from != "") {
 				assert(properties_node.as_string() != prototype_derived_from);
-				object_type_inheritance()[properties_node.as_string()] = prototype_derived_from;
+				add_inheritance_relationship(properties_node.as_string(), prototype_derived_from);
 			}
 			prototype_derived_from = properties_node.as_string();
 
@@ -425,7 +547,10 @@ void init_object_definition(variant node, const std::string& id_, CustomObjectCa
 				continue;
 			}
 
-			proto_definitions[properties_node.as_string()].reset(new CustomObjectCallable(*callable_definition_));
+			auto new_callable = new CustomObjectCallable(*callable_definition_);
+			new_callable->setTypeName("obj " + properties_node.as_string());
+
+			proto_definitions[properties_node.as_string()].reset(new_callable);
 			continue;
 		}
 
@@ -594,10 +719,31 @@ void init_object_definition(variant node, const std::string& id_, CustomObjectCa
 	if(prototype_derived_from != "") {
 		ASSERT_LOG(id_ != prototype_derived_from, "Object " << id_ << " derives from itself");
 		object_type_inheritance()[id_] = prototype_derived_from;
+		add_inheritance_relationship(id_, prototype_derived_from);
 	}
 
 	callable_definition_->finalizeProperties();
 	callable_definition_->setStrict(is_strict_);
+
+	for(auto f : g_object_validation_functions) {
+		std::vector<variant> protos;
+
+		while(prototype_derived_from != "") {
+			protos.push_back(variant(prototype_derived_from));
+			auto it = object_type_inheritance().find(prototype_derived_from);
+			if(it == object_type_inheritance().end()) {
+				break;
+			}
+			prototype_derived_from = it->second;
+		}
+
+		std::vector<variant> args;
+		args.push_back(node);
+		args.push_back(variant(&protos));
+
+		variant result = f(args);
+		ASSERT_LOG(result.is_null(), "Object validation failed for object " << id_ << ": " << result.as_string());
+	}
 }
 
 variant g_player_type_str;
@@ -740,6 +886,10 @@ ConstCustomObjectTypePtr CustomObjectType::get(const std::string& id)
 	//when an object starts its variation.
 	result->loadVariations();
 
+	for(auto s : result->preloadObjects()) {
+		get(s);
+	}
+
 	return result;
 }
 
@@ -774,6 +924,10 @@ namespace
 CustomObjectTypePtr CustomObjectType::recreate(const std::string& id,
                                              const CustomObjectType* old_type)
 {
+	static std::set<std::string> stable_object_id;
+	auto p = stable_object_id.insert("LOAD_OBJECT " + id);
+	formula_profiler::Instrument instrument(p.first->c_str());
+
 	if(object_file_paths().empty()) {
 		load_file_paths();
 	}
@@ -782,8 +936,8 @@ CustomObjectTypePtr CustomObjectType::recreate(const std::string& id,
 	std::map<std::string, std::string>::const_iterator path_itor = module::find(object_file_paths(), id + ".cfg");
 	ASSERT_LOG(path_itor != object_file_paths().end(), "Could not find file for object '" << id << "'");
 
-	auto proto_path = module::find(prototype_file_paths(), id + ".cfg");
-	ASSERT_LOG(proto_path == prototype_file_paths().end(), "Object " << id << " has a prototype with the same name. Objects and prototypes must have distinct names");
+//	auto proto_path = module::find(prototype_file_paths(), id + ".cfg");
+//	ASSERT_LOG(proto_path == prototype_file_paths().end(), "Object " << id << " has a prototype with the same name. Objects and prototypes must have distinct names");
 
 	try {
 		std::vector<std::string> proto_paths;
@@ -835,11 +989,11 @@ void CustomObjectType::invalidateAllObjects()
 	::prototype_file_paths().clear();
 }
 
-std::vector<std::string> CustomObjectType::getAllIds()
+std::vector<std::string> CustomObjectType::getAllIds(bool prototypes)
 {
 	std::vector<std::string> res;
 	std::map<std::string, std::string> file_paths;
-	module::get_unique_filenames_under_dir(object_path(), &file_paths);
+	module::get_unique_filenames_under_dir(prototypes ? prototype_path() : object_path(), &file_paths);
 	for(std::map<std::string, std::string>::const_iterator i = file_paths.begin(); i != file_paths.end(); ++i) {
 		const std::string& fname = i->first;
 		if(fname.size() < 4 || std::string(fname.end()-4, fname.end()) != ".cfg") {
@@ -852,6 +1006,29 @@ std::vector<std::string> CustomObjectType::getAllIds()
 
 	return res;
 }
+
+const std::vector<std::string>& CustomObjectType::possibleIdsIncludingPrototypes()
+{
+	static std::vector<std::string> result;
+	if(result.empty()) {
+		auto a = getAllIds(true);
+		auto b = getAllIds(false);
+		result.insert(result.end(), a.begin(), a.end());
+		result.insert(result.end(), b.begin(), b.end());
+
+		for(std::string& s : result) {
+			auto colon = std::find(s.begin(), s.end(), ':');
+			if(colon != s.end()) {
+				s.erase(s.begin(), colon+1);
+			}
+		}
+
+		std::sort(result.begin(), result.end());
+	}
+
+	return result;
+}
+
 
 std::map<std::string,CustomObjectType::EditorSummary> CustomObjectType::getEditorCategories()
 {
@@ -933,7 +1110,16 @@ std::map<std::string,CustomObjectType::EditorSummary> CustomObjectType::getEdito
 			EditorSummary& summary = m[i.first.as_string()];
 			summary.category = i.second["category"].as_string();
 			if(i.second["help"].is_string()) {
-				summary.help = i.second["help"].as_string();
+				//   Word wrap the help descriptions of objects
+				// in the editor. For readability!
+				summary.help = util::word_wrap(
+						i.second["help"].as_string(),
+						//   Must be set up to this low
+						// when wanting to accomodate
+						// some 13" laptops.
+						//   TODO Make it variable.
+						108
+				);
 			}
 			summary.first_frame = i.second["animation"];
 		}
@@ -1003,7 +1189,8 @@ int CustomObjectType::reloadModifiedCode()
 		}
 	}
 
-	files_updated = error_paths;
+	//TODO: do something with the error paths/error messages.
+	files_updated.clear();
 
 	return result;
 }
@@ -1126,7 +1313,7 @@ void CustomObjectType::initEventHandlers(variant node,
 	for(const variant_pair& value : node.as_map()) {
 		const std::string& key = value.first.as_string();
 		if(key.size() > 3 && std::equal(key.begin(), key.begin() + 3, "on_")) {
-			ASSERT_LOG(events_node.is_null(), "Object " << node["id"].as_string() << " has an events node but also has " << key << ". Cannot mix old and new-style events");
+			//ASSERT_LOG(events_node.is_null(), "Object " << node["id"].as_string() << " has an events node but also has " << key << ". Cannot mix old and new-style events");
 			const std::string event(key.begin() + 3, key.end());
 			initEventHandler(event, value.second, handlers, symbols, base_handlers);
 		}
@@ -1157,6 +1344,7 @@ void init_level_definition();
 
 CustomObjectType::CustomObjectType(const std::string& id, variant node, const CustomObjectType* base_type, const CustomObjectType* old_type)
   : id_(id),
+    numeric_id_(getObjectTypeIndex(id)),
 	hitpoints_(node["hitpoints"].as_int(1)),
 	timerFrequency_(node["timer_frequency"].as_int(-1)),
 	zorder_(node["zorder"].as_int()),
@@ -1169,6 +1357,7 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
     body_passthrough_(node["body_passthrough"].as_bool(false)),
     ignore_collide_(node["ignore_collide"].as_bool(false)),
     object_level_collisions_(node["object_level_collisions"].as_bool(false)),
+	editor_only_(node["editor_only"].as_bool(false)),
 	surface_friction_(node["surface_friction"].as_int(100)),
 	surface_traction_(node["surface_traction"].as_int(100)),
 	friction_(node["friction"].as_int()),
@@ -1212,8 +1401,12 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 	is_strict_((!g_suppress_strict_mode && node["is_strict"].as_bool(custom_object_strict_mode)) || g_force_strict_mode),
 	is_shadow_(node["is_shadow"].as_bool(false)),
 	particle_system_desc_(node["particles"]),
-	document_(nullptr)
+	preload_objects_(node["preload_objects"].as_list_string_optional()),
+	document_(nullptr),
+	draw_batch_id_(node["draw_batch_id"].as_string_default(""))
 {
+	ObjectTypesSpawnedTracker types_spawned;
+
 	if(g_player_type_str.is_null() == false) {
 		//if a playable object type has been set, register what the type of
 		//the player is before we construct our object.
@@ -1308,7 +1501,7 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 	}
 
 	for(variant anim : anim_list.as_list()) {
-		boost::intrusive_ptr<Frame> f;
+		ffl::IntrusivePtr<Frame> f;
 		try {
 			f.reset(new Frame(anim));
 		} catch(Frame::Error&) {
@@ -1484,7 +1677,7 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 				entry.setter = game_logic::Formula::createOptionalFormula(value["set"], getFunctionSymbols(), setter_def);
 				entry.onchange = game_logic::Formula::createOptionalFormula(value["change"], getFunctionSymbols(), setter_def);
 				if(value["init"].is_null() == false) {
-					entry.init = game_logic::Formula::createOptionalFormula(value["init"], getFunctionSymbols(), game_logic::ConstFormulaCallableDefinitionPtr(&CustomObjectCallable::instance()));
+					entry.init = game_logic::Formula::createOptionalFormula(value["init"], getFunctionSymbols(), callable_definition_);
 					assert(entry.init);
 					if(is_strict_) {
 						assert(entry.type);
@@ -1504,10 +1697,23 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 
 				ASSERT_LOG(!entry.init || entry.storage_slot != -1, "Property " << id_ << "." << k << " cannot have initializer since it's not a variable");
 
+
+
 				if(value.has_key("editor_info")) {
 					entry.has_editor_info = true;
 					const game_logic::Formula::StrictCheckScope strict_checking(false);
 					variant editor_info_var = value["editor_info"];
+
+					if (editor_info_var.is_string() && editor_info_var.as_string() == "enum") {
+						ASSERT_LOG(entry.type->is_type(variant::VARIANT_TYPE_ENUM), "Property " << id_ << " cannot be exposed as an enum to the editor since it's not an enum type.");
+						variant_builder b;
+
+						//TODO: finish up calculating the enum value.
+						b.add("type", "enum");
+						editor_info_var = b.build();
+						value.add_attr_mutation(variant("editor_info"), editor_info_var);
+					}
+
 					static const variant name_key("name");
 					editor_info_var = editor_info_var.add_attr(name_key, variant(k));
 					EditorVariableInfo info(editor_info_var);
@@ -1555,6 +1761,10 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 
 			if(entry.init) {
 				properties_with_init_.push_back(entry.slot);
+			}
+
+			if(entry.setter) {
+				properties_with_setter_.push_back(entry.slot);
 			}
 
 			entry.requires_initialization = entry.storage_slot >= 0 && entry.type && !entry.type->match(entry.default_value) && !dynamic_initialization && !entry.init;
@@ -1616,10 +1826,36 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 		if(node["shader"].is_string()) {
 			shader_ = graphics::AnuraShaderPtr(new graphics::AnuraShader(node["shader"].as_string()));
 		} else {
-			KRE::ShaderProgram::loadFromVariant(node["shader"]);
-			std::string shader_name = node["shader"]["name"].as_string();
-			ASSERT_LOG(!shader_name.empty(), "No name for shader found.");
+			variant shader_info = node["shader"];
+
+			if(shader_info.has_key("flags")) {
+				variant flags = shader_info["flags"];
+				for(variant f : flags.as_list()) {
+					std::string prop = f.as_string();
+					auto it = properties().find(prop);
+					ASSERT_LOG(it != properties().end(), "Shader flag for " << id_ << " has invalid property: " << prop);
+					shader_flags_.push_back(&it->second);
+					ASSERT_LOG(shader_flags_.size() <= MAX_CUSTOM_OBJECT_SHADER_FLAGS, "Object " << id_ << " has too many shader flags. Only " << MAX_CUSTOM_OBJECT_SHADER_FLAGS << " allowed");
+				}
+
+				shader_node_ = shader_info;
+			}
+
+			const std::string shader_name = write_uuid(generate_uuid());
+			shader_info = shader_info.add_attr(variant("name"), variant(shader_name));
+
+			if(shader_info.has_key("fragment")) {
+
+				if(shader_info.has_key("vertex") == false) {
+
+					static variant DefaultVertexShader(DefaultVertexShaderStr);
+					shader_info = shader_info.add_attr(variant("vertex"), DefaultVertexShader);
+				}
+			}
+			
+			KRE::ShaderProgram::loadFromVariant(shader_info);
 			shader_ = graphics::AnuraShaderPtr(new graphics::AnuraShader(shader_name));
+
 		}
 		//LOG_DEBUG("Added shader '" << shader_->getName() << "' for CustomObjectType '" << id_ << "'");
 	}
@@ -1662,6 +1898,12 @@ CustomObjectType::CustomObjectType(const std::string& id, variant node, const Cu
 		}
 	}
 	initEventHandlers(node, event_handlers_, getFunctionSymbols(), base_type ? &base_type->event_handlers_ : nullptr);
+
+	for(const std::string& t : types_spawned.spawned) {
+		if(std::find(preload_objects_.begin(), preload_objects_.end(), t) == preload_objects_.end()) {
+			preload_objects_.push_back(t);
+		}
+	}
 }
 
 CustomObjectType::~CustomObjectType()
@@ -1801,7 +2043,7 @@ ConstCustomObjectTypePtr CustomObjectType::getVariation(const std::vector<std::s
 	if(!result) {
 		variant node = node_;
 
-		boost::intrusive_ptr<game_logic::MapFormulaCallable> callable(new game_logic::MapFormulaCallable);
+		ffl::IntrusivePtr<game_logic::MapFormulaCallable> callable(new game_logic::MapFormulaCallable);
 		callable->add("doc", variant(variant_callable::create(&node)));
 
 		for(const std::string& v : variations) {
@@ -1839,6 +2081,89 @@ void CustomObjectType::loadVariations() const
 		getVariation(std::vector<std::string>(1, v));
 	}
 }
+
+graphics::AnuraShaderPtr CustomObjectType::getShaderWithParms(unsigned int flags) const
+{
+	if(flags == 0) {
+		return shader_;
+	}
+
+	if(flags >= shader_variants_.size()) {
+		shader_variants_.resize(flags+1);
+	}
+
+	if(shader_variants_[flags].get() == nullptr) {
+		variant shader_info = shader_node_;
+
+		const std::string shader_name = write_uuid(generate_uuid());
+		shader_info = shader_info.add_attr(variant("name"), variant(shader_name));
+
+		std::string frag = shader_info["fragment"].as_string();
+		std::string header = "";
+		for(unsigned int n = 0; n < shader_flags_.size(); ++n) {
+			if(flags&(1 << n)) {
+				header += "#define FLAG_" + shader_flags_[n]->id + "\n";
+			}
+		}
+
+		frag = header + frag;
+
+		shader_info = shader_info.add_attr(variant("fragment"), variant(frag));
+
+		if(shader_info.has_key("vertex") == false) {
+			static variant DefaultVertexShader(DefaultVertexShaderStr);
+			shader_info = shader_info.add_attr(variant("vertex"), DefaultVertexShader);
+		}
+	
+		KRE::ShaderProgram::loadFromVariant(shader_info);
+		shader_variants_[flags] = graphics::AnuraShaderPtr(new graphics::AnuraShader(shader_name));
+	}
+
+	return shader_variants_[flags];
+}
+
+using namespace game_logic;
+
+class CustomObjectInterface : public game_logic::FormulaCallable
+{
+public:
+private:
+	DECLARE_CALLABLE(CustomObjectInterface);
+};
+
+BEGIN_DEFINE_CALLABLE_NOBASE(CustomObjectInterface)
+DEFINE_FIELD(objects, "[{name: string, refcount: int}]")
+	std::vector<variant> res;
+	for(const auto& p : cache()) {
+		variant_builder b;
+		b.add("name", p.first);
+		b.add("refcount", static_cast<int>(p.second.use_count()));
+		res.push_back(b.build());
+	}
+	return variant(&res);
+
+BEGIN_DEFINE_FN(preload, "(string) ->commands")
+	std::string str(FN_ARG(0).as_string());
+	return variant(new game_logic::FnCommandCallable("object::preload", [str]() {
+		CustomObjectType::get(str);
+	}));
+END_DEFINE_FN
+
+BEGIN_DEFINE_FN(unload, "(string) ->commands")
+	std::string str(FN_ARG(0).as_string());
+	return variant(new game_logic::FnCommandCallable("object::unload", [str]() {
+		cache().erase(str);
+	}));
+END_DEFINE_FN
+
+END_DEFINE_CALLABLE(CustomObjectInterface)
+
+const std::string FunctionModule = "core";
+
+FUNCTION_DEF(anura_objects, 0, 0, "anura_objects()")
+	return variant(new CustomObjectInterface);
+RETURN_TYPE("builtin custom_object_interface")
+END_FUNCTION_DEF(anura_objects)
 
 #include "Texture.hpp"
 

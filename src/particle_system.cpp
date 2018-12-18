@@ -69,7 +69,7 @@ namespace
 			const int nframes_per_row = node["frames_per_row"].as_int(-1);
 			const int pad = node["pad"].as_int();
 
-			boost::intrusive_ptr<Frame> frame_obj(new Frame(node));
+			ffl::IntrusivePtr<Frame> frame_obj(new Frame(node));
 
 			int row = 0, col = 0;
 			for(int n = 0; n != nframes; ++n) {
@@ -201,7 +201,7 @@ namespace
 		explicit SimpleParticleSystemFactory(variant node);
 		~SimpleParticleSystemFactory() {}
 
-		ParticleSystemPtr create(const Entity& e) const;
+		ParticleSystemPtr create(const Entity& e) const override;
 
 		std::vector<ParticleAnimation> frames_;
 
@@ -401,13 +401,14 @@ namespace
 			p.anim = &factory_.frames_[rand()%factory_.frames_.size()];
 
 			const int diff_x = info_.max_x_ - info_.min_x_;
+			float num_before = p.pos[0];
 			if(diff_x > 0) {
-				p.pos[0] += (rand()%(diff_x*1000))/1000.0f;
+				p.pos[0] += rand() % diff_x + (rand() % 1000)*0.001f;
 			}
 
 			const int diff_y = info_.max_y_ - info_.min_y_;
 			if(diff_y > 0) {
-				p.pos[1] += (rand()%(diff_y*1000))/1000.0f;
+				p.pos[1] += rand() % diff_y + (rand() % 1000)*0.001f;
 			}
 
 			if(!e.isFacingRight()) {
@@ -444,10 +445,10 @@ namespace
 					color.a = std::max(256 - info_.delta_a_*(cycle_ - gen.created_at), 0);
 				}
 
-				const float x1 = pp->pos[0] + f.x_adjust * facing;
-				const float x2 = pp->pos[0] + (anim->width() - f.x2_adjust) * facing;
-				const float y1 = pp->pos[1] + f.y_adjust;
-				const float y2 = pp->pos[1] + anim->height() - f.y2_adjust;
+                const float x1 = pp->pos[0] + (f.x_adjust - anim->width()/2.0) * facing;
+                const float x2 = pp->pos[0] + (anim->width()/2.0 - f.x2_adjust) * facing;
+                const float y1 = pp->pos[1] + f.y_adjust - anim->height()/2.0;
+                const float y2 = pp->pos[1] + anim->height()/2.0 - f.y2_adjust;
 
 				vtc.emplace_back(glm::vec2(x1, y1), glm::vec2(f.u1, f.v1), color);
 				vtc.emplace_back(glm::vec2(x2, y1), glm::vec2(f.u2, f.v1), color);
@@ -829,7 +830,7 @@ namespace
 		  : info_(node)
 		{}
 
-		ParticleSystemPtr create(const Entity& e) const {
+		ParticleSystemPtr create(const Entity& e) const override {
 			return ParticleSystemPtr(new PointParticleSystem(e, info_));
 		}
 

@@ -87,6 +87,18 @@ public:
 	void drawCustom(graphics::AnuraShaderPtr shader, int x, int y, const std::vector<CustomPoint>& points, const rect* area, bool face_right, bool upside_down, int time, float rotate) const;
 	void drawCustom(graphics::AnuraShaderPtr shader, int x, int y, const float* xy, const float* uv, int nelements, bool face_right, bool upside_down, int time, float rotate, int cycle) const;
 
+	struct BatchDrawItem {
+		const Frame* frame;
+		int x, y;
+		bool face_right;
+		bool upside_down;
+		int time;
+		float rotate;
+		float scale;
+	};
+
+	static void drawBatch(graphics::AnuraShaderPtr shader, const BatchDrawItem* i1, const BatchDrawItem* i2);
+
 	void setImageAsSolid();
 	ConstSolidInfoPtr solid() const { return solid_; }
 	ConstSolidInfoPtr platform() const { return platform_; }
@@ -147,11 +159,18 @@ public:
 
 	point pivot(const std::string& name, int time_in_frame) const;
 	int frameNumber(int time_in_frame) const;
+
+	const std::vector <std::string>& getSounds() const { return sounds_; }
+
+	void SetNeedsSerialization(bool b) { needs_serialization_ = b; }
+	bool GetNeedsSerialization() const { return needs_serialization_;  }
 private:
 	DECLARE_CALLABLE(Frame);
 
 	void getRectInTexture(int time, const FrameInfo*& info) const;
 	void getRectInFrameNumber(int nframe, const FrameInfo*& info) const;
+
+	void surrenderReferences(GarbageCollector* collector) override;
 	std::string id_, image_;
 
 	//ID as a variant, useful to be able to get a variant of the ID
@@ -198,9 +217,13 @@ private:
 	void buildAlphaFromFrameInfo();
 	void buildAlpha();
 	std::vector<bool> alpha_;
+	bool allow_wrapping_;
 	bool force_no_alpha_;
 
 	bool no_remove_alpha_borders_;
+
+	//the animation was created dynamically and should be serialized with objects
+	bool needs_serialization_;
 
 	std::vector<int> palettes_recognized_;
 	int current_palette_;
@@ -217,4 +240,4 @@ private:
 	mutable KRE::Blittable blit_target_;
 };
 
-typedef boost::intrusive_ptr<Frame> FramePtr;
+typedef ffl::IntrusivePtr<Frame> FramePtr;

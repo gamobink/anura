@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="ReleaseXP|Win32">
       <Configuration>ReleaseXP</Configuration>
@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\imgui\imgui.h" />
     <ClInclude Include="..\..\src\achievements.hpp" />
     <ClInclude Include="..\..\src\animation_creator.hpp" />
     <ClInclude Include="..\..\src\animation_preview_widget.hpp" />
@@ -103,6 +104,8 @@
     <ClInclude Include="..\..\src\formula_tokenizer.hpp" />
     <ClInclude Include="..\..\src\formula_variable_storage.hpp" />
     <ClInclude Include="..\..\src\formula_visualize_widget.hpp" />
+    <ClInclude Include="..\..\src\formula_vm.hpp" />
+    <ClInclude Include="..\..\src\formula_where.hpp" />
     <ClInclude Include="..\..\src\frame.hpp" />
     <ClInclude Include="..\..\src\framed_gui_element.hpp" />
     <ClInclude Include="..\..\src\ft_iface.hpp" />
@@ -116,16 +119,16 @@
     <ClInclude Include="..\..\src\group_property_editor_dialog.hpp" />
     <ClInclude Include="..\..\src\gui_section.hpp" />
     <ClInclude Include="..\..\src\haptic.hpp" />
+    <ClInclude Include="..\..\src\hex\hex.hpp" />
     <ClInclude Include="..\..\src\hex\hex_fwd.hpp" />
-    <ClInclude Include="..\..\src\hex\hex_logical_fwd.hpp" />
-    <ClInclude Include="..\..\src\hex\hex_logical_tiles.hpp" />
+    <ClInclude Include="..\..\src\hex\hex_helper.hpp" />
+    <ClInclude Include="..\..\src\hex\hex_loader.hpp" />
     <ClInclude Include="..\..\src\hex\hex_map.hpp" />
     <ClInclude Include="..\..\src\hex\hex_mask.hpp" />
-    <ClInclude Include="..\..\src\hex\hex_object.hpp" />
-    <ClInclude Include="..\..\src\hex\hex_pathfinding.hpp" />
     <ClInclude Include="..\..\src\hex\hex_renderable.hpp" />
     <ClInclude Include="..\..\src\hex\hex_renderable_fwd.hpp" />
     <ClInclude Include="..\..\src\hex\hex_tile.hpp" />
+    <ClInclude Include="..\..\src\hex\tile_rules.hpp" />
     <ClInclude Include="..\..\src\http_client.hpp" />
     <ClInclude Include="..\..\src\http_server.hpp" />
     <ClInclude Include="..\..\src\i18n.hpp" />
@@ -171,14 +174,15 @@
     <ClInclude Include="..\..\src\kre\Frustum.hpp" />
     <ClInclude Include="..\..\src\kre\geometry.hpp" />
     <ClInclude Include="..\..\src\kre\Gradients.hpp" />
+    <ClInclude Include="..\..\src\kre\imgui_impl_sdl_gl3.h" />
     <ClInclude Include="..\..\src\kre\LightObject.hpp" />
     <ClInclude Include="..\..\src\kre\ModelMatrixScope.hpp" />
     <ClInclude Include="..\..\src\kre\ParticleSystem.hpp" />
     <ClInclude Include="..\..\src\kre\ParticleSystemAffectors.hpp" />
     <ClInclude Include="..\..\src\kre\ParticleSystemEmitters.hpp" />
     <ClInclude Include="..\..\src\kre\ParticleSystemFwd.hpp" />
-    <ClInclude Include="..\..\src\kre\ParticleSystemObservers.hpp" />
     <ClInclude Include="..\..\src\kre\ParticleSystemParameters.hpp" />
+    <ClInclude Include="..\..\src\kre\ParticleSystemUI.hpp" />
     <ClInclude Include="..\..\src\kre\PixelFormat.hpp" />
     <ClInclude Include="..\..\src\kre\Renderable.hpp" />
     <ClInclude Include="..\..\src\kre\RenderFwd.hpp" />
@@ -327,6 +331,7 @@
     <ClInclude Include="..\..\src\tbs_web_server.hpp" />
     <ClInclude Include="..\..\src\TextureObject.hpp" />
     <ClInclude Include="..\..\src\text_editor_widget.hpp" />
+    <ClInclude Include="..\..\src\theme_imgui.hpp" />
     <ClInclude Include="..\..\src\thread.hpp" />
     <ClInclude Include="..\..\src\tiled\tiled.hpp" />
     <ClInclude Include="..\..\src\tiled\tmx_reader.hpp" />
@@ -395,12 +400,18 @@
     <ClInclude Include="..\..\src\xhtml\xhtml_style_tree.hpp" />
     <ClInclude Include="..\..\src\xhtml\xhtml_text_box.hpp" />
     <ClInclude Include="..\..\src\xhtml\xhtml_text_node.hpp" />
+    <ClInclude Include="..\..\src\xhtml\xslider.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\imgui\imgui_user.inl" />
     <None Include="..\..\src\custom_object.inc" />
     <None Include="..\..\src\kre\geometry.inl" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\imgui\imgui.cpp">
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">IMGUI_INCLUDE_IMGUI_USER_INL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\imgui\imgui_draw.cpp" />
     <ClCompile Include="..\..\src\achievements.cpp" />
     <ClCompile Include="..\..\src\animation_creator.cpp" />
     <ClCompile Include="..\..\src\animation_preview_widget.cpp" />
@@ -472,12 +483,14 @@
     <ClCompile Include="..\..\src\formula_function_registry.cpp" />
     <ClCompile Include="..\..\src\formula_garbage_collector.cpp" />
     <ClCompile Include="..\..\src\formula_interface.cpp" />
+    <ClCompile Include="..\..\src\formula_internal.cpp" />
     <ClCompile Include="..\..\src\formula_object.cpp" />
     <ClCompile Include="..\..\src\formula_profiler.cpp" />
     <ClCompile Include="..\..\src\formula_test.cpp" />
     <ClCompile Include="..\..\src\formula_tokenizer.cpp" />
     <ClCompile Include="..\..\src\formula_variable_storage.cpp" />
     <ClCompile Include="..\..\src\formula_visualize_widget.cpp" />
+    <ClCompile Include="..\..\src\formula_vm.cpp" />
     <ClCompile Include="..\..\src\frame.cpp" />
     <ClCompile Include="..\..\src\framed_gui_element.cpp" />
     <ClCompile Include="..\..\src\ft_iface.cpp" />
@@ -489,13 +502,13 @@
     <ClCompile Include="..\..\src\grid_widget.cpp" />
     <ClCompile Include="..\..\src\group_property_editor_dialog.cpp" />
     <ClCompile Include="..\..\src\gui_section.cpp" />
-    <ClCompile Include="..\..\src\hex\hex_logical_tiles.cpp" />
+    <ClCompile Include="..\..\src\hex\hex_helper.cpp" />
+    <ClCompile Include="..\..\src\hex\hex_loader.cpp" />
     <ClCompile Include="..\..\src\hex\hex_map.cpp" />
     <ClCompile Include="..\..\src\hex\hex_mask.cpp" />
-    <ClCompile Include="..\..\src\hex\hex_object.cpp" />
-    <ClCompile Include="..\..\src\hex\hex_pathfinding.cpp" />
     <ClCompile Include="..\..\src\hex\hex_renderable.cpp" />
     <ClCompile Include="..\..\src\hex\hex_tile.cpp" />
+    <ClCompile Include="..\..\src\hex\tile_rules.cpp" />
     <ClCompile Include="..\..\src\http_client.cpp" />
     <ClCompile Include="..\..\src\http_server.cpp" />
     <ClCompile Include="..\..\src\i18n.cpp" />
@@ -535,13 +548,14 @@
     <ClCompile Include="..\..\src\kre\FontSTB.cpp" />
     <ClCompile Include="..\..\src\kre\Frustum.cpp" />
     <ClCompile Include="..\..\src\kre\Gradients.cpp" />
+    <ClCompile Include="..\..\src\kre\imgui_impl_sdl_gl3.cpp" />
     <ClCompile Include="..\..\src\kre\LightObject.cpp" />
     <ClCompile Include="..\..\src\kre\ModelMatrixScope.cpp" />
     <ClCompile Include="..\..\src\kre\ParticleSystem.cpp" />
     <ClCompile Include="..\..\src\kre\ParticleSystemAffectors.cpp" />
     <ClCompile Include="..\..\src\kre\ParticleSystemEmitters.cpp" />
-    <ClCompile Include="..\..\src\kre\ParticleSystemObservers.cpp" />
     <ClCompile Include="..\..\src\kre\ParticleSystemParameters.cpp" />
+    <ClCompile Include="..\..\src\kre\ParticleSystemUI.cpp" />
     <ClCompile Include="..\..\src\kre\Renderable.cpp" />
     <ClCompile Include="..\..\src\kre\RenderManager.cpp" />
     <ClCompile Include="..\..\src\kre\RenderQueue.cpp" />
@@ -667,6 +681,7 @@
     <ClCompile Include="..\..\src\tbs_web_server.cpp" />
     <ClCompile Include="..\..\src\TextureObject.cpp" />
     <ClCompile Include="..\..\src\text_editor_widget.cpp" />
+    <ClCompile Include="..\..\src\theme_imgui.cpp" />
     <ClCompile Include="..\..\src\thread.cpp" />
     <ClCompile Include="..\..\src\tiled\tiled.cpp" />
     <ClCompile Include="..\..\src\tiled\tmx_reader.cpp" />
@@ -685,6 +700,7 @@
     <ClCompile Include="..\..\src\variant.cpp" />
     <ClCompile Include="..\..\src\variant_callable.cpp" />
     <ClCompile Include="..\..\src\variant_type.cpp" />
+    <ClCompile Include="..\..\src\variant_type_check.cpp" />
     <ClCompile Include="..\..\src\variant_utils.cpp" />
     <ClCompile Include="..\..\src\video_selections.cpp" />
     <ClCompile Include="..\..\src\VoronoiDiagramGenerator.cpp" />
@@ -733,45 +749,51 @@
     <ClCompile Include="..\..\src\xhtml\xhtml_style_tree.cpp" />
     <ClCompile Include="..\..\src\xhtml\xhtml_text_box.cpp" />
     <ClCompile Include="..\..\src\xhtml\xhtml_text_node.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <Library Include="..\Box2D\$(Configuration)\$(Platform)\Box2D.lib" />
-    <Library Include="..\lua\$(Configuration)\$(Platform)\lua.lib" />
+    <ClCompile Include="..\..\src\xhtml\xslider.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="..\..\src\anura-resouces.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Box2D\Box2D.vcxproj">
+      <Project>{d58a2972-afa1-4363-9777-52d8bc187dc0}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\lua\lua.vcxproj">
+      <Project>{4d133dd4-c7f6-4867-b53c-8a27711438a1}</Project>
+    </ProjectReference>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{716CE053-6375-400F-BEB5-0AC23E709C55}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>anura</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.17134.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v120</PlatformToolset>
+    <PlatformToolset>v141</PlatformToolset>
     <WholeProgramOptimization>false</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseXP|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v120_xp</PlatformToolset>
+    <PlatformToolset>v141_xp</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v120</PlatformToolset>
+    <PlatformToolset>v141</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseXP|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v120_xp</PlatformToolset>
+    <PlatformToolset>v141_xp</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -796,6 +818,7 @@
     <OutDir>$(SolutionDir)\$(Configuration)\$(Platform)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\</IntDir>
     <CustomBuildAfterTargets>Link</CustomBuildAfterTargets>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseXP|Win32'">
     <LinkIncremental>false</LinkIncremental>
@@ -821,8 +844,8 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_USE_MATH_DEFINES;HAVE_M_PI;USE_BOX2D;USE_LUA;USE_LIBVPX;USE_SVG;_CRT_SECURE_NO_WARNINGS;_SCL_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0600;NOMINMAX;USE_BREAKPAD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\src;..\..\src\kre;..\..\src\svg;..\..\src\hex;..\..\src\xhtml;..\..\src\tiled;..\..\src\lua;..\..\Box2D;..\..\external\include;..\..\external\include\SDL;..\..\external\include\windows;..\..\external\include\windows\client\windows\handler;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_USE_MATH_DEFINES;HAVE_M_PI;USE_BOX2D;USE_LUA;USE_LIBVPX;USE_SVG;_CRT_SECURE_NO_WARNINGS;_SCL_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0600;NOMINMAX;OGG_DYNAMIC="libvorbisfile-3.dll";USE_IMGUI;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\src;..\..\src\kre;..\..\src\svg;..\..\src\hex;..\..\src\xhtml;..\..\src\tiled;..\..\src\lua;..\..\Box2D;..\..\..\boost;..\..\external\include;..\..\external\include\SDL;..\..\external\include\windows;..\..\external\include\windows\client\windows\handler;..\..\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -830,6 +853,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>..\..\external\lib\Win32</AdditionalLibraryDirectories>
+      <AdditionalDependencies>psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <CustomBuildStep>
       <Command>build_copy_files.bat $(OutputPath)$(TargetFileName) $(SolutionDir) $(Platform)</Command>

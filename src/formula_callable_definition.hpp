@@ -57,6 +57,8 @@ namespace game_logic
 
 			bool isPrivate() const { return private_counter > 0; }
 			int private_counter;
+
+			std::function<bool(variant*)> constant_fn;
 		};
 
 		FormulaCallableDefinition();
@@ -72,6 +74,12 @@ namespace game_logic
 		virtual int getNumSlots() const = 0;
 
 		virtual const Entry* getDefaultEntry() const { return nullptr; }
+
+		virtual bool getSymbolIndexForSlot(int slot, int* index) const = 0;
+		virtual int getBaseSymbolIndex() const = 0;
+
+		virtual void setHasSymbolIndexes() { has_symbol_indexes_ = true; }
+		virtual bool hasSymbolIndexes() const { return has_symbol_indexes_; }
 
 		Entry* getEntryById(const std::string& key) {
 			const int slot = getSlot(key);
@@ -98,6 +106,8 @@ namespace game_logic
 		bool is_strict_;
 		bool supports_slot_lookups_;
 		std::string type_name_;
+
+		bool has_symbol_indexes_;
 	};
 
 	FormulaCallableDefinitionPtr modify_formula_callable_definition(ConstFormulaCallableDefinitionPtr base_def, int slot, variant_type_ptr new_type, const FormulaCallableDefinition* new_def=nullptr);
@@ -204,7 +214,7 @@ void classname::init_callable_type(std::vector<CallablePropertyEntry>& fields, s
 			type_info->num_unneeded_args = static_cast<int>(type_info->variant_types.size()) - min_args; \
 			type_info->arg_names.resize(type_info->variant_types.size()); \
 		} \
-		boost::intrusive_ptr<const FormulaCallable> ref(&obj_instance); \
+		ffl::IntrusivePtr<const FormulaCallable> ref(&obj_instance); \
 		return variant([=](const game_logic::FormulaCallable& args) ->variant { \
 			const this_type& obj = *dynamic_cast<const this_type*>(ref.get());
 

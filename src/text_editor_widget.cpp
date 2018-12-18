@@ -238,6 +238,14 @@ namespace gui
 			ffl_on_change_focus_ = getEnvironment()->createFormula(v["on_change_focus"]);
 		}
 
+		//a filter for pasting, a function which takes a string and spews out a string which will
+		//be used to filter any incoming pastes.
+		ffl_fn_filter_paste_ = v["filter_paste"];
+		if(ffl_fn_filter_paste_.is_null() == false) {
+			variant_type_ptr t = parse_variant_type(variant("function(string)->string"));
+			ASSERT_LOG(t->match(ffl_fn_filter_paste_), "illegal variant type given to filter_paste: " << t->mismatch_reason(ffl_fn_filter_paste_));
+		}
+
 		char_width_= KRE::Font::charWidth(font_size_, monofont());
 		char_height_ = KRE::Font::charHeight(font_size_, monofont());
 		nrows_ = (height - BorderSize*2)/char_height_;
@@ -689,10 +697,6 @@ namespace gui
 					cursor_.col = text_[cursor_.row].size();
 				}
 
-				if(select_ != cursor_) {
-					//a mouse-based copy for X-style copy/paste
-					handleCopy(true);
-				}
 			} else {
 				consecutive_clicks_ = 0;
 
@@ -767,14 +771,26 @@ namespace gui
 
 		if(event.keysym.sym == SDLK_a && (event.keysym.mod&KMOD_CTRL)) {
 			recordOp();
-			cursor_.row = static_cast<int>(text_.size() - 1);
-			cursor_.col = static_cast<int>(text_[cursor_.row].size());
-			onMoveCursor();
-			select_ = Loc(0, 0);
-			if(select_ != cursor_) {
-				//a mouse-based copy for X-style copy/paste
-				handleCopy(true);
+
+			if(on_select_all_fn_) {
+				auto p = on_select_all_fn_(text());
+				auto cursor = text_pos_to_row_col(static_cast<int>(p.first));
+				cursor_.row = cursor.first;
+				cursor_.col = cursor.second;
+
+				onMoveCursor();
+
+				auto select = text_pos_to_row_col(static_cast<int>(p.second));
+				select_.row = select.first;
+				select_.col = select.second;
+
+			} else {
+				cursor_.row = static_cast<int>(text_.size() - 1);
+				cursor_.col = static_cast<int>(text_[cursor_.row].size());
+				onMoveCursor();
+				select_ = Loc(0, 0);
 			}
+
 			return true;
 		}
 
@@ -847,6 +863,9 @@ namespace gui
 					recordOp();
 					return true;
 				}
+			} else if(event.keysym.sym == SDLK_d) {
+				setFocus(false);// Lose focus when debug console is opened
+				return false;	// Let the input fall through so the console is opened
 			} else { 
 				recordOp();
 				return false;
@@ -1157,6 +1176,13 @@ namespace gui
 		return false;
 	}
 
+	namespace {
+		//the last string we stuck in the clipboard. Used to
+		//determine if text from the clipboard looks like it
+		//came from our own application.
+		static std::string g_str_put_in_clipboard;
+	}
+
 	void TextEditorWidget::handlePaste(std::string txt)
 	{
 		if(!editable_) {
@@ -1167,6 +1193,15 @@ namespace gui
 		deleteSelection();
 
 		txt.erase(std::remove(txt.begin(), txt.end(), '\r'), txt.end());
+
+		//if we have a filtering function and the text doesn't appear to be
+		//text we got from ourselves, then filter it.
+		if(ffl_fn_filter_paste_.is_function() && txt != g_str_put_in_clipboard) {
+			std::vector<variant> arg;
+			arg.push_back(variant(txt));
+			txt = ffl_fn_filter_paste_(arg).as_string();
+		}
+
 		std::vector<std::string> lines = util::split(txt, '\n', 0 /*don't remove empties or strip spaces*/);
 
 		truncateColPosition();
@@ -1186,13 +1221,8 @@ namespace gui
 		onChange();
 	}
 
-	void TextEditorWidget::handleCopy(bool mouse_based)
+	void TextEditorWidget::handleCopy()
 	{
-		LOG_INFO("HANDLE COPY...");
-		if(mouse_based && !clipboard_has_mouse_area()) {
-			return;
-		}
-
 		Loc begin = cursor_;
 		Loc end = select_;
 
@@ -1221,9 +1251,10 @@ namespace gui
 			str += "\n" + std::string(text_[end.row].begin(), text_[end.row].begin() + end.col);
 		}
 
-		LOG_INFO("COPY TO CLIPBOARD: " << str << " " << mouse_based);
+		LOG_INFO("COPY TO CLIPBOARD: " << str);
 
-		copy_to_clipboard(str, mouse_based);
+		g_str_put_in_clipboard = str;
+		copy_to_clipboard(str);
 	}
 
 	void TextEditorWidget::deleteSelection()
@@ -1399,11 +1430,6 @@ namespace gui
 		}
 
 		ScrollableWidget::setYscroll(static_cast<int>(scroll_pos_ * char_height_));
-
-		if(select_ != cursor_) {
-			//a mouse-based copy for X-style copy/paste
-			handleCopy(true);
-		}
 
 		if(onMoveCursor_) {
 			onMoveCursor_();

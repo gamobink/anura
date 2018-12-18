@@ -26,20 +26,22 @@
 OPTIMIZE?=yes
 USE_LUA?=yes
 USE_BOX2D?=yes
+
 CCACHE?=ccache
-USE_CCACHE?=$(shell which $(CCACHE) 2>&1 > /dev/null && echo yes)
+USE_CCACHE?=$(shell which $(CCACHE) > /dev/null 2>&1 && echo yes)
 ifneq ($(USE_CCACHE),yes)
 CCACHE=
+USE_CCACHE=no
 endif
 
 SANITIZE_ADDRESS?=
 ifneq ($(SANITIZE_ADDRESS), yes)
-SANITIZE_ADDRESS=
+SANITIZE_ADDRESS=no
 endif
 
 SANITIZE_UNDEFINED?=
 ifneq ($(SANITIZE_UNDEFINED), yes)
-SANITIZE_UNDEFINED=
+SANITIZE_UNDEFINED=no
 endif
 
 ifeq ($(OPTIMIZE),yes)
@@ -47,7 +49,7 @@ BASE_CXXFLAGS += -O2
 endif
 
 ifneq ($(USE_LUA), yes)
-USE_LUA=
+USE_LUA=no
 endif
 
 BASE_CXXFLAGS += -Wall -Werror
@@ -60,7 +62,13 @@ BASE_CXXFLAGS += -Wno-pointer-bool-conversion -Wno-parentheses-equality
 endif
 else ifneq (, $(findstring g++, `$(CXX)`))
 GCC_GTEQ_490 := $(shell expr `$(CXX) -dumpversion | sed -e 's/\.\([0-9][0-9]\)/\1/g' -e 's/\.\([0-9]\)/0\1/g' -e 's/^[0-9]\{3,4\}$$/&00/'` \>= 40900)
+GCC_GTEQ_510 := $(shell expr `$(CXX) -dumpversion | sed -e 's/\.\([0-9][0-9]\)/\1/g' -e 's/\.\([0-9]\)/0\1/g' -e 's/^[0-9]\{3,4\}$$/&00/'` \>= 50100)
 BASE_CXXFLAGS += -Wno-literal-suffix -Wno-sign-compare
+
+ifeq "$(GCC_GTEQ_510)" "1"
+BASE_CXXFLAGS += -Wsuggest-override
+endif
+
 ifeq "$(GCC_GTEQ_490)" "1"
 BASE_CXXFLAGS += -fdiagnostics-color=auto
 else
@@ -74,6 +82,9 @@ USE_SDL2?=$(shell which $(SDL2_CONFIG) 2>&1 > /dev/null && echo yes)
 ifneq ($(USE_SDL2),yes)
 $(error SDL2 not found, SDL-1.2 is no longer supported)
 endif
+
+BASE_CXXFLAGS += $(shell $(SDL2_CONFIG) --cflags)
+LDFLAGS+ = $(shell $(SDL2_CONFIG) --ldflags)
 
 ifeq ($(USE_LUA), yes)
 BASE_CXXFLAGS += -DUSE_LUA
@@ -90,6 +101,8 @@ BASE_CXXFLAGS += -std=c++0x -g -fno-inline-functions \
 
 LDFLAGS?=-rdynamic
 
+MANDATORY_LIBS=pkg-config --cflags x11 sdl2 glew SDL2_image SDL2_ttf libpng zlib freetype2 cairo
+
 # Check for sanitize-address option
 ifeq ($(SANITIZE_ADDRESS), yes)
 BASE_CXXFLAGS += -g3 -fsanitize=address
@@ -102,7 +115,7 @@ BASE_CXXFLAGS += -fsanitize=undefined
 endif
 
 # Compiler include options, used after CXXFLAGS and CPPFLAGS.
-INC := -isystem external/header-only-libs $(shell pkg-config --cflags x11 sdl2 glew SDL2_image SDL2_ttf libpng zlib freetype2 cairo)
+INC := -isystem external/header-only-libs $(shell $(MANDATORY_LIBS))
 
 ifdef STEAM_RUNTIME_ROOT
 	INC += -isystem $(STEAM_RUNTIME_ROOT)/include
@@ -110,8 +123,8 @@ endif
 
 # Linker library options.
 LIBS := $(shell pkg-config --libs x11 gl ) \
-	$(shell pkg-config --libs sdl2 glew SDL2_image libpng zlib freetype2 cairo) \
-	-lSDL2_ttf -lSDL2_mixer -lrt
+	$(shell pkg-config --libs $(MANDATORY_LIBS)) \
+	 -logg -lvorbis -lvorbisfile -lrt
 
 # libvpx check
 USE_LIBVPX?=$(shell pkg-config --exists vpx && echo yes)
@@ -119,6 +132,8 @@ ifeq ($(USE_LIBVPX),yes)
 	BASE_CXXFLAGS += -DUSE_LIBVPX
 	INC += $(shell pkg-config --cflags vpx)
 	LIBS += $(shell pkg-config --libs vpx)
+else
+USE_LIBVPX=no
 endif
 
 # couchbase check
@@ -126,6 +141,8 @@ USE_DB_CLIENT?=no
 ifeq ($(USE_DB_CLIENT),yes)
     BASE_CXXFLAGS += -DUSE_DBCLIENT
     LIBS += -lcouchbase
+else
+USE_DB_CLIENT=no
 endif
 
 # cairo check
@@ -134,6 +151,8 @@ ifeq ($(USE_SVG),yes)
 	BASE_CXXFLAGS += -DUSE_SVG
 	INC += $(shell pkg-config --cflags cairo)
 	LIBS += $(shell pkg-config --libs cairo)
+else
+USE_SVG=no
 endif
 
 MODULES   := kre svg Box2D tiled hex xhtml
@@ -148,6 +167,16 @@ SRC       := $(foreach sdir,$(SRC_DIR),$(wildcard $(sdir)/*.cpp))
 OBJ       := $(patsubst src/%.cpp,./build/%.o,$(SRC))
 DEPS      := $(patsubst src/%.cpp,./build/%.d,$(SRC))
 INCLUDES  := $(addprefix -I,$(SRC_DIR))
+
+USE_IMGUI?=yes
+ifeq ($(USE_IMGUI),yes)
+  BASE_CXXFLAGS += -DUSE_IMGUI
+  INC += -Iimgui
+  CPPFLAGS += -Iexternal/header-only-libs -DIMGUI_INCLUDE_IMGUI_USER_INL
+  SRC += imgui/imgui.cpp imgui/imgui_draw.cpp
+  OBJ += imgui/imgui.o imgui/imgui_draw.o
+  SRC_DIR += ./imgui
+endif
 
 vpath %.cpp $(SRC_DIR)
 
@@ -170,22 +199,23 @@ anura: $(OBJ)
 		$(LIBS) -lboost_regex -lboost_system -lboost_filesystem -lboost_locale -licui18n -licuuc -licudata -lpthread -fthreadsafe-statics
 
 checkdirs: $(BUILD_DIR)
-	@echo \
-	  " OPTIMIZE            : $(OPTIMIZE)\n" \
-	  "USE_CCACHE          : $(USE_CCACHE)\n" \
-	  "CCACHE              : $(CCACHE)\n" \
-	  "SANITIZE_ADDRESS    : $(SANITIZE_ADDRESS)\n" \
-	  "SANITIZE_UNDEFINED  : $(SANITIZE_UNDEFINED)\n" \
-	  "USE_DB_CLIENT       : $(USE_DB_CLIENT)\n" \
-	  "USE_BOX2D           : $(USE_BOX2D)\n" \
-	  "USE_LIBVPX          : $(USE_LIBVPX)\n" \
-	  "USE_LUA             : $(USE_LUA)\n" \
-	  "USE_SDL2            : $(USE_SDL2)\n" \
-	  "CXX                 : $(CXX)\n" \
-	  "BASE_CXXFLAGS       : $(BASE_CXXFLAGS)\n" \
-	  "CXXFLAGS            : $(CXXFLAGS)\n" \
-	  "LDFLAGS             : $(LDFLAGS)\n" \
-	  "LIBS                : $(LIBS)"
+	@printf "\
+	OPTIMIZE            : $(OPTIMIZE)\n\
+USE_CCACHE          : $(USE_CCACHE)\n\
+	CCACHE              : $(CCACHE)\n\
+SANITIZE_ADDRESS    : $(SANITIZE_ADDRESS)\n\
+SANITIZE_UNDEFINED  : $(SANITIZE_UNDEFINED)\n\
+	USE_DB_CLIENT       : $(USE_DB_CLIENT)\n\
+	USE_BOX2D           : $(USE_BOX2D)\n\
+USE_LIBVPX          : $(USE_LIBVPX)\n\
+	USE_LUA             : $(USE_LUA)\n\
+	USE_SDL2            : $(USE_SDL2)\n\
+CXX                 : $(CXX)\n\
+	BASE_CXXFLAGS       : $(BASE_CXXFLAGS)\n\
+	CXXFLAGS            : $(CXXFLAGS)\n\
+LDFLAGS             : $(LDFLAGS)\n\
+INC                 : $(INC)\n\
+LIBS                : $(LIBS)\n"
 
 
 $(BUILD_DIR):
@@ -196,7 +226,7 @@ clean:
 
 unittests: anura
 	./anura --tests
-	    
+
 tarball: unittests
 	@strip anura
 	@tar --transform='s,^,anura/,g' -cjf $(TARBALL) anura data/ images/

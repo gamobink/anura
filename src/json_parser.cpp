@@ -436,6 +436,10 @@ namespace json
 
 							try {
 								v = preprocess_string_value(s, callable);
+
+								if(v.get_debug_info()) {
+									str_debug_info = *v.get_debug_info();
+								}
 							} catch(preprocessor_error&) {
 								CHECK_PARSE(false, "Preprocessor error: " + s, t.begin - doc.c_str());
 							}
@@ -644,7 +648,7 @@ namespace json
 	bool file_exists_and_is_valid(const std::string& fname)
 	{
 		try {
-			parse_from_file(fname);
+			parse_from_file(fname, json::JSON_PARSE_OPTIONS::NO_PREPROCESSOR);
 			return true;
 		} catch(ParseError&) {
 			return false;

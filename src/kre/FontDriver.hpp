@@ -62,7 +62,7 @@ namespace KRE
 		void setWidth(int width) { width_ = width; }
 		void setHeight(int height) { height_ = height; }
 		void setColorPointer(const ColorPtr& color);
-		void preRender(const WindowPtr& wnd);
+		void preRender(const WindowPtr& wnd) override;
 	private:
 		std::shared_ptr<Attribute<font_coord>> attribs_;
 		// intrinsic width and height when rendered, in pixels.
@@ -83,7 +83,7 @@ namespace KRE
 		void setWidth(int width) { width_ = width; }
 		void setHeight(int height) { height_ = height; }
 		void setColorPointer(const ColorPtr& color);
-		void preRender(const WindowPtr& wnd);
+		void preRender(const WindowPtr& wnd) override;
 		void updateColors(const std::vector<Color>& colors);
 		void setVerticesPerColor(int n) { vertices_per_color_ = n; }
 	private:
@@ -111,6 +111,8 @@ namespace KRE
 		void renderText();
 		void getFontMetrics();
 		int getDescender();
+		int getBoundingHeight();
+		int getBaseline();
 		rect getBoundingBox(const std::string& text);
 		FontRenderablePtr createRenderableFromPath(FontRenderablePtr r, const std::string& text, const std::vector<point>& path);
 		ColoredFontRenderablePtr createColoredRenderableFromPath(ColoredFontRenderablePtr r, const std::string& text, const std::vector<point>& path, const std::vector<KRE::Color>& colors);

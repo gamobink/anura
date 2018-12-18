@@ -3,6 +3,8 @@
 
 #include <boost/filesystem/operations.hpp>
 
+#include <GL/glew.h>
+
 #include "auto_update_window.hpp"
 #include "base64.hpp"
 #include "compress.hpp"
@@ -27,9 +29,64 @@
 #include <unistd.h>
 #endif
 
+extern std::string g_anura_exe_name;
 extern std::string g_loading_screen_bg_color;
+
+PREF_STRING(auto_update_dir, "", "Directory in which the auto-updater is");
+PREF_STRING(auto_update_exe, "", "Exe of the auto-updater");
+
 PREF_STRING(auto_update_game_name, "Anura", "Title shown on the auto update window");
 PREF_STRING(auto_update_title, "Anura auto-update", "Title of the auto-update window");
+
+PREF_STRING(auto_update_install_dir, "", "Directory which to install the game to");
+
+void run_auto_updater()
+{
+	std::string original_cwd = sys::get_cwd();
+
+	if(!g_auto_update_dir.empty() && !g_auto_update_exe.empty()) {
+
+		int res = chdir(g_auto_update_dir.c_str());
+		if(res != 0) {
+			LOG_ERROR("Auto-update: Could not chdir " << g_auto_update_dir << ": " << res);
+			return;
+		}
+
+		std::vector<char*> anura_args;
+		anura_args.push_back(const_cast<char*>(g_anura_exe_name.c_str()));
+		anura_args.push_back(nullptr);
+
+		LOG_ERROR("Auto-update: switched to " << g_auto_update_dir << " running " << g_auto_update_exe);
+
+		execv(anura_args[0], &anura_args[0]);
+		LOG_ERROR("Failed to execute auto updater. Re-running game...");
+#if defined(__linux__)
+		LOG_ERROR("Errno: " << errno);
+#endif
+
+		res = chdir(original_cwd.c_str());
+		if(res != 0) {
+			LOG_ERROR("Auto-update: Could not chdir " << original_cwd << ": " << res);
+			return;
+		}
+	}
+	
+	auto v = preferences::argv();
+	std::vector<char*> anura_args;
+	for(const std::string& s : v) {
+		anura_args.push_back(const_cast<char*>(s.c_str()));
+	}
+
+	anura_args.push_back(nullptr);
+
+	execv(anura_args[0], &anura_args[0]);
+	LOG_ERROR("Failed to restart game\n");
+#if defined(__linux__)
+	LOG_ERROR("Errno: " << errno);
+#endif
+
+	return;
+}
 
 namespace 
 {
@@ -368,7 +425,13 @@ private:
 		auto itor = update_chunks_.find(chunk["md5"].as_string());
 		if(itor != update_chunks_.end()) {
 			try {
-				std::string data_str = chunk["data"].as_string();
+				std::string data_str;
+				if(chunk["data"].is_string()) {
+					data_str = chunk["data"].as_string();
+				} else {
+					data_str = sys::read_file("update-cache/" + chunk["md5"].as_string());
+				}
+
 				std::vector<char> data_buf;
 				data_buf.insert(data_buf.begin(), data_str.begin(), data_str.end());
 
@@ -473,7 +536,7 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 	variant_builder update_info;
 
 	if(update_anura || update_module) {
-		boost::intrusive_ptr<module::client> cl, anura_cl;
+		ffl::IntrusivePtr<module::client> cl, anura_cl;
 
 		bool is_new_install = false;
 
@@ -497,6 +560,16 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 
 		if(update_module) {
 			cl.reset(new module_updater_client(update_window));
+			cl->set_module_description("game");
+			if(g_auto_update_install_dir.empty() == false) {
+				cl->set_install_path_override(g_auto_update_install_dir + "/modules/" + module::get_module_name());
+			}
+
+			cl->set_show_progress_fn([&update_window](const std::string& msg) {
+				update_window.set_message(msg);
+				update_window.process();
+				update_window.draw();
+			});
 			const bool res = cl->install_module(module::get_module_name(), force);
 			if(!res) {
 				cl.reset();
@@ -512,6 +585,16 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 
 		if(update_anura) {
 			anura_cl.reset(new module::client);
+			anura_cl->set_module_description("engine");
+			if(g_auto_update_install_dir.empty() == false) {
+				anura_cl->set_install_path_override(g_auto_update_install_dir);
+			}
+
+			anura_cl->set_show_progress_fn([&update_window](const std::string& msg) {
+				update_window.set_message(msg);
+				update_window.process();
+				update_window.draw();
+			});
 			//anura_cl->set_install_image(true);
 			const bool res = anura_cl->install_module(real_anura, force);
 			if(!res) {
@@ -528,7 +611,6 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 			timeout_ms *= 10;
 		}
 
-		int nbytes_transferred = 0, nbytes_anura_transferred = 0;
 		int start_time = profile::get_tick_time();
 		bool timeout = false;
 		LOG_INFO("Requesting update to module from server...");
@@ -539,38 +621,24 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 		if(is_new_install) {
 			update_window.set_is_new_install();
 		}
+
+		ffl::IntrusivePtr<module::client> cl_install, anura_cl_install;
+
+		int cl_nbytes_total = 0, anura_cl_nbytes_total = 0, cl_nbytes_transferred = 0, anura_cl_nbytes_transferred = 0;
+
 		while(cl || anura_cl) {
 			update_window.process();
-
-			int nbytes_obtained = 0;
-			int nbytes_needed = 0;
 
 			++nupdate_cycle;
 
 			if(cl) {
-				const int transferred = cl->nbytes_transferred();
-				nbytes_obtained += transferred;
-				nbytes_needed += cl->nbytes_total();
-				if(transferred != nbytes_transferred) {
-					if(nupdate_cycle%10 == 0) {
-						LOG_INFO("Transferred " << (transferred/1024) << "/" << (cl->nbytes_total()/1024) << "KB");
-					}
-					start_time = profile::get_tick_time();
-					nbytes_transferred = transferred;
-				}
+				cl_nbytes_transferred = cl->nbytes_transferred();
+				cl_nbytes_total = cl->nbytes_total();
 			}
 
 			if(anura_cl) {
-				const int transferred = anura_cl->nbytes_transferred();
-				nbytes_obtained += transferred;
-				nbytes_needed += anura_cl->nbytes_total();
-				if(transferred != nbytes_anura_transferred) {
-					if(nupdate_cycle%10 == 0) {
-						LOG_INFO("Transferred " << (transferred/1024) << "/" << (anura_cl->nbytes_total()/1024) << "KB");
-					}
-					start_time = profile::get_tick_time();
-					nbytes_anura_transferred = transferred;
-				}
+				anura_cl_nbytes_transferred = anura_cl->nbytes_transferred();
+				anura_cl_nbytes_total = anura_cl->nbytes_total();
 			}
 
 			const int time_taken = profile::get_tick_time() - start_time;
@@ -583,28 +651,22 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 			}
 
 			char msg[1024];
-			if(nbytes_needed == 0) {
+			if(anura_cl_nbytes_total < 0 || cl_nbytes_total < 0) {
 				sprintf(msg, "%s", get_update_config("message_text_contacting").as_string_default("Updating Game. Contacting server...").c_str());
 			} else {
-				sprintf(msg, "%s%0.2f/%0.2f%s", get_update_config("message_text_prefix").as_string_default("Updating Game. Transferred ").c_str(), float(nbytes_obtained/(1024.0*1024.0)), float(nbytes_needed/(1024.0*1024.0)), get_update_config("message_text_postfix").as_string_default("MB").c_str());
+				sprintf(msg, "%s%0.2f/%0.2f%s", get_update_config("message_text_prefix").as_string_default("Updating Game. Transferred ").c_str(), float((cl_nbytes_transferred + anura_cl_nbytes_transferred)/(1024.0*1024.0)), float((anura_cl_nbytes_total + cl_nbytes_total)/(1024.0*1024.0)), get_update_config("message_text_postfix").as_string_default("MB").c_str());
 			}
 
 			update_window.set_message(msg);
 
-			const float ratio = nbytes_needed <= 0 ? 0 : static_cast<float>(nbytes_obtained)/static_cast<float>(nbytes_needed);
+			const float ratio = (anura_cl_nbytes_total < 0 || cl_nbytes_total < 0) ? 0 : static_cast<float>(cl_nbytes_transferred + anura_cl_nbytes_transferred)/static_cast<float>(std::max<int>(1, (anura_cl_nbytes_total + cl_nbytes_total)));
 			update_window.set_progress(ratio);
 			update_window.draw();
 
 			SDL_Event event;
 			while(SDL_PollEvent(&event)) {
 				if(event.type == SDL_QUIT) {
-					if(is_new_install) {
-						return true;
-					}
-
-					cl.reset();
-					anura_cl.reset();
-					break;
+					return true;
 				}
 			}
 
@@ -615,8 +677,9 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 						HANDLE_ERROR("Error while updating module: " << cl->error().c_str());
 						update_info.add("module_error", variant(cl->error()));
 					} else {
-						update_info.add("complete_module", true);
+						cl_install = cl;
 					}
+
 					cl.reset();
 				}
 
@@ -626,9 +689,34 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 						update_info.add("anura_error", variant(anura_cl->error()));
 					} else {
 						update_info.add("complete_anura", true);
+						anura_cl_install = anura_cl;
 					}
+
 					anura_cl.reset();
 				}
+			}
+		}
+
+		cl = cl_install;
+		anura_cl = anura_cl_install;
+
+		if(cl && cl->is_pending_install()) {
+			cl->complete_install();
+			if(cl->error().empty() == false) {
+				HANDLE_ERROR("Error while installing module: " << cl->error().c_str());
+				update_info.add("module_error", variant(cl->error()));
+			} else {
+				update_info.add("complete_module", true);
+			}
+		}
+
+		if(anura_cl && anura_cl->is_pending_install()) {
+			anura_cl->complete_install();
+			if(anura_cl->error().empty() == false) {
+				HANDLE_ERROR("Error while installing anura: " << anura_cl->error().c_str());
+				update_info.add("anura_error", variant(anura_cl->error()));
+			} else {
+				update_info.add("complete_anura", true);
 			}
 		}
 
@@ -650,7 +738,19 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 		}
 	}
 
-	const std::string working_dir = preferences::dlc_path() + "/" + real_anura + subdir;
+	//remove the update cache since we downloaded and installed everything.
+	sys::rmdir_recursive("update-cache");
+
+#ifdef _MSC_VER
+	const std::string cl_quotes = "\"";
+#else
+	const std::string cl_quotes = "";
+#endif
+
+	std::string cwd_arg = cl_quotes + "--auto-update-dir=" + sys::get_cwd() + cl_quotes;
+	std::string exe_arg = cl_quotes + "--auto-update-exe=" + (g_auto_update_exe.empty() == false ? g_auto_update_exe : g_anura_exe_name) + cl_quotes;
+
+	const std::string working_dir = g_auto_update_install_dir.empty() == false ? g_auto_update_install_dir : preferences::dlc_path() + "/" + real_anura + subdir;
 	LOG_INFO("CHANGE DIRECTORY: " << working_dir);
 	const int res = chdir(working_dir.c_str());
 	ASSERT_LOG(res == 0, "Could not change directory to game working directory: " << working_dir);
@@ -665,6 +765,9 @@ bool do_auto_update(std::deque<std::string> argv, auto_update_window& update_win
 	for(const std::string& a : argv) {
 		anura_args.push_back(const_cast<char*>(a.c_str()));
 	}
+
+	anura_args.push_back(const_cast<char*>(cwd_arg.c_str()));
+	anura_args.push_back(const_cast<char*>(exe_arg.c_str()));
 
 	std::string command_line;
 	for(const char* c : anura_args) {
@@ -804,6 +907,24 @@ COMMAND_LINE_UTILITY(window_test)
 		fprintf(stderr, "Could not create window: %s\n", SDL_GetError());
 		return;
 	}
+
+	auto context = SDL_GL_CreateContext(win);
+	assert(context != nullptr);
+
+	SDL_GL_SetSwapInterval(0);
+
+	int prev = 0;
+	for(int i = 0; i != 100000; ++i) {
+		glClearColor(i%2 ? 0.05 : 0.0, 0.0, 0.0, 1.0);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+		SDL_GL_SwapWindow(win);
+		if(i%100 == 0) {
+			int t = SDL_GetTicks();
+			fprintf(stderr, "%d -> %fms\n", i, float((t - prev)/100.0f));
+			prev = t;
+		}
+	}
+	
 	SDL_Delay(1000);
 	SDL_DestroyWindow(win);
 	SDL_Quit();

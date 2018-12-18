@@ -27,6 +27,7 @@
 #include "Canvas.hpp"
 
 #include "custom_object.hpp"
+#include "debug_console.hpp"
 #include "entity.hpp"
 #include "level.hpp"
 #include "playable_custom_object.hpp"
@@ -36,15 +37,17 @@
 #include "variant_utils.hpp"
 
 Entity::Entity(variant node)
-  : x_(node["x"].as_int()*100),
+  : WmlSerializableFormulaCallable(node["_uuid"].is_string() ? read_uuid(node["_uuid"].as_string()) : generate_uuid()),
+    x_(node["x"].as_int()*100),
     y_(node["y"].as_int()*100),
 	anchorx_(-1),
 	anchory_(-1),
 	prev_feet_x_(std::numeric_limits<int>::min()), prev_feet_y_(std::numeric_limits<int>::min()),
 	last_move_x_(0), last_move_y_(0),
+	zorder_(0), zsub_order_(0),
 	face_right_(node["face_right"].as_bool(true)),
 	upside_down_(node["upside_down"].as_bool(false)),
-	rotate_z_(0),
+	rotate_z_(node["rotate"].as_decimal()),
 	group_(node["group"].as_int(-1)),
     id_(-1), respawn_(node["respawn"].as_bool(true)),
 	solid_dimensions_(0), collide_dimensions_(0),
@@ -70,6 +73,7 @@ Entity::Entity(variant node)
 Entity::Entity(int x, int y, bool face_right)
   : x_(x*100), y_(y*100), anchorx_(-1), anchory_(-1), prev_feet_x_(std::numeric_limits<int>::min()), prev_feet_y_(std::numeric_limits<int>::min()),
 	last_move_x_(0), last_move_y_(0),
+	zorder_(0), zsub_order_(0),
     face_right_(face_right), upside_down_(false), group_(-1), id_(-1),
 	respawn_(true), solid_dimensions_(0), collide_dimensions_(0),
 	weak_solid_dimensions_(0), weak_collide_dimensions_(0),	platform_motion_x_(0), 
@@ -157,7 +161,9 @@ int Entity::getFeetX() const
 int Entity::getFeetY() const
 {
 	if(solid_) {
-		return y() + solid_->area().y() + solid_->area().h();
+		return isUpsideDown() ?
+				solidRect().y2() + 1 :
+		       y() + solid_->area().y() + solid_->area().h();
 	}
 	if(anchory_ != -1) {
 		return y() + (getCurrentFrame().area().h()*getCurrentFrame().scale()*anchory_)/1000;
@@ -230,7 +236,15 @@ void Entity::setFacingRight(bool facing)
 
 void Entity::setUpsideDown(bool facing)
 {
+	const int start_y = solid_rect_.y();
 	upside_down_ = facing;
+	calculateSolidRect();
+
+	const int delta_y = solid_rect_.y() - start_y;
+	y_ -= delta_y*100;
+	calculateSolidRect();
+
+	assert(start_y == solid_rect_.y());
 }
 
 void Entity::setRotateZ(float new_rotate_z)
@@ -253,11 +267,21 @@ void Entity::calculateSolidRect()
 	if(solid_) {
 		const rect& area = solid_->area();
 
+		int xpos;
 		if(isFacingRight()) {
-			solid_rect_ = rect(x() + area.x(), y() + area.y(), area.w(), area.h());
+			xpos = x() + area.x();
 		} else {
-			solid_rect_ = rect(x() + f.width() - area.x() - area.w(), y() + area.y(), area.w(), area.h());
+			xpos = x() + f.width() - area.x() - area.w();
 		}
+
+		int ypos;
+		if(isUpsideDown()) {
+			ypos = y() + f.height() - area.y() - area.h();
+		} else {
+			ypos = y() + area.y();
+		}
+
+		solid_rect_ = rect(xpos, ypos, area.w(), area.h());
 	} else {
 		solid_rect_ = rect();
 	}
@@ -345,25 +369,49 @@ void Entity::drawDebugRects() const
 		return;
 	}
 
+	const float radians_to_degrees = 57.29577951308232087f;
+
+	float rotation = currentRotation()/radians_to_degrees;
+
 	auto wnd = KRE::WindowManager::getMainWindow();
 
 	const rect& body = solidRect();
 	if(body.w() > 0 && body.h() > 0) {
-		RectRenderable body_rr;
-		body_rr.update(body, KRE::Color(0,0,0,0xaa));
+		RectRenderable body_rr(true, true);
+		body_rr.update(body, rotation, KRE::Color(255,255,255,0xaa));
 		wnd->render(&body_rr);
+	}
+
+	rect platform = platformRect();
+	if(platform.w() > 0) {
+		if(platform.h() < 2) {
+			platform = rect(platform.x(), platform.y(), platform.w(), 2);
+		}
+		RectRenderable platform_rr(true, true);
+		platform_rr.update(platform, rotation, KRE::Color(0,255,0,0xaa));
+		wnd->render(&platform_rr);
 	}
 
 	const rect& hit = getHitRect();
 	if(hit.w() > 0 && hit.h() > 0) {
-		RectRenderable hit_rr;
-		hit_rr.update(body, KRE::Color(255,0,0,0xaa));
+		RectRenderable hit_rr(true, true);
+		hit_rr.update(body, rotation, KRE::Color(255,0,0,0xaa));
 		wnd->render(&hit_rr);
 	}
 
-	RectRenderable feet_rr;
+	RectRenderable feet_rr(true, true);
 	feet_rr.update(getFeetX() - 1, getFeetY() - 1, 3, 3, KRE::Color(255,255,255,0xaa));
 	wnd->render(&feet_rr);
+
+	const Frame& f = getCurrentFrame();
+	for(auto area : f.getCollisionAreas()) {
+		if(area.name == "attack") {
+			const rect r = calculateCollisionRect(f, area);
+			RectRenderable rr(true, true);
+			rr.update(r, rotation, KRE::Color(255,0,0,0xaa));
+			wnd->render(&rr);
+		}
+	}
 }
 
 void Entity::generateCurrent(const Entity& target, int* velocity_x, int* velocity_y) const
@@ -377,18 +425,47 @@ void Entity::generateCurrent(const Entity& target, int* velocity_x, int* velocit
 	}
 }
 
+static const int EndAnimationScheduledCommand = -20000000;
+
+void Entity::addEndAnimCommand(variant cmd)
+{
+	scheduled_commands_.push_back(ScheduledCommand(EndAnimationScheduledCommand, cmd));
+}
+
+std::vector<variant> Entity::popEndAnimCommands()
+{
+	std::vector<variant> result;
+	auto i = scheduled_commands_.begin();
+	while(i != scheduled_commands_.end()) {
+		if(i->t == EndAnimationScheduledCommand) {
+			result.push_back(i->cmd);
+			i = scheduled_commands_.erase(i);
+		} else {
+			++i;
+		}
+	}
+	return result;
+}
+
 void Entity::addScheduledCommand(int cycle, variant cmd)
 {
 	scheduled_commands_.push_back(ScheduledCommand(cycle, cmd));
+	if(debug_console::isExecutingDebugConsoleCommand()) {
+		scheduled_commands_.back().is_debug = true;
+	}
 }
 
-std::vector<variant> Entity::popScheduledCommands()
+std::vector<variant> Entity::popScheduledCommands(bool* is_debug)
 {
 	std::vector<variant> result;
 	std::vector<ScheduledCommand>::iterator i = scheduled_commands_.begin();
 	while(i != scheduled_commands_.end()) {
-		if(--(i->first) <= 0) {
-			result.push_back(i->second);
+		if(i->t != EndAnimationScheduledCommand && --(i->t) <= 0) {
+			if(is_debug && i->is_debug) {
+				*is_debug = true;
+			}
+
+			result.push_back(i->cmd);
 			i = scheduled_commands_.erase(i);
 		} else {
 			++i;
@@ -434,13 +511,13 @@ void Entity::setDistinctLabel()
 
 void Entity::setControlStatus(const std::string& key, bool value)
 {
-	static const std::string keys[] = { "up", "down", "left", "right", "attack", "jump" };
-	const std::string* k = std::find(keys, keys + controls::NUM_CONTROLS, key);
-	if(k == keys + controls::NUM_CONTROLS) {
+	static const std::vector<std::string> keys { "up", "down", "left", "right", "attack", "jump" };
+	const auto it = std::find(keys.begin(), keys.end(), key);
+	if(it == keys.end()) {
 		return;
 	}
 
-	const auto index = k - keys;
+	const auto index = it - keys.begin();
 	controls_[index] = value;
 }
 
@@ -492,24 +569,18 @@ const rect& Entity::getMouseOverArea() const
 	return mouse_over_area_;
 }
 
-bool zorder_compare(const EntityPtr& a, const EntityPtr& b)
+void Entity::beingRemoved()
 {
-	//the reverse_global_vertical_zordering flag is set in the player object (our general repository for all major game rules et al).  It's meant to reverse vertical sorting of objects in the same zorder, depending on whether objects are being viewed from above, or below.  In frogatto proper, objects at a higher vertical position should overlap those below.  In a top-down game, the reverse is desirable.
-	if(Level::current().player() && Level::current().player()->hasReverseGlobalVerticalZordering()){
-		return a->zorder() < b->zorder() ||
-			(a->zorder() == b->zorder() && a->zSubOrder() < b->zSubOrder()) ||
-			(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y < b->getMidpoint().y) ||
-			(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y == b->getMidpoint().y && a.get() < b.get());		
-	}
-	return a->zorder() < b->zorder() ||
-		(a->zorder() == b->zorder() && a->zSubOrder() < b->zSubOrder()) ||
-		(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y > b->getMidpoint().y) ||
-		(a->zorder() == b->zorder() && a->zSubOrder() == b->zSubOrder() && a->getMidpoint().y == b->getMidpoint().y && a.get() > b.get());
+	scheduled_commands_.clear();
 }
 
-bool EntityZOrderCompare::operator()(const EntityPtr& lhs, const EntityPtr& rhs) 
+bool zorder_compare(const EntityPtr& a, const EntityPtr& b)
 {
-	return zorder_compare(lhs, rhs);
+	return EntityZOrderCompare()(a, b);
+}
+
+EntityZOrderCompare::EntityZOrderCompare() : reverse_(Level::current().player() && Level::current().player()->hasReverseGlobalVerticalZordering())
+{
 }
 
 void Entity::surrenderReferences(GarbageCollector* collector)
@@ -517,7 +588,7 @@ void Entity::surrenderReferences(GarbageCollector* collector)
 	collector->surrenderVariant(&controls_user_, "CONTROLS_USER");
 
 	for(ScheduledCommand& cmd : scheduled_commands_) {
-		collector->surrenderVariant(&cmd.second, "SCHEDULED_CMD");
+		collector->surrenderVariant(&cmd.cmd, "SCHEDULED_CMD");
 	}
 
 	for(EntityPtr& attachment : attached_objects_) {

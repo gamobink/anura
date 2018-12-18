@@ -21,6 +21,8 @@
 	   distribution.
 */
 
+#include <GL/glew.h>
+
 #include <algorithm>
 #include <iostream>
 #include <math.h>
@@ -47,9 +49,7 @@
 #include "formatter.hpp"
 #include "formula_profiler.hpp"
 #include "json_parser.hpp"
-#include "hex_map.hpp"
-#include "hex_mask.hpp"
-#include "hex_renderable.hpp"
+#include "hex.hpp"
 #include "level.hpp"
 #include "level_object.hpp"
 #include "level_runner.hpp"
@@ -83,13 +83,15 @@
 #ifndef NO_EDITOR
 std::set<Level*>& get_all_levels_set() 
 {
-	static std::set<Level*> all;
-	return all;
+	static std::set<Level*>* all = new std::set<Level*>;
+	return *all;
 }
 #endif
 
 namespace 
 {
+	PREF_INT(debug_skip_draw_zorder_begin, INT_MIN, "Avoid drawing the given zorder");
+	PREF_INT(debug_skip_draw_zorder_end, INT_MIN, "Avoid drawing the given zorder");
 	PREF_BOOL(debug_shadows, false, "Show debug visualization of shadow drawing");
 
 	LevelPtr& get_current_level() 
@@ -160,19 +162,6 @@ void Level::setAsCurrentLevel()
 {
 	get_current_level() = this;
 	Frame::setColorPalette(palettes_used_);
-
-	auto wnd = KRE::WindowManager::getMainWindow();
-
-	if(false && preferences::auto_size_window()) {
-		static bool auto_sized = false;
-		if(!auto_sized) {
-			auto_sized = true;
-		}
-
-		int w,h;
-		wnd->autoWindowSize(w, h);
-		wnd->setWindowSize(w, h);
-	}
 }
 
 namespace 
@@ -185,29 +174,160 @@ namespace
 	variant_type_ptr g_player_type;
 }
 
+Level::SubComponent::SubComponent() : source_area(0, 0, 0, 0), num_variations(1)
+{}
+
+Level::SubComponent::SubComponent(variant node) : source_area(node["source_area"]), num_variations(node["num_variations"].as_int(1))
+{}
+
+variant Level::SubComponent::write() const
+{
+	variant_builder res;
+	res.add("source_area", source_area.write());
+	res.add("num_variations", num_variations);
+	return res.build();
+}
+
+Level::SubComponentUsage::SubComponentUsage() : dest_area(0, 0, 0, 0), ncomponent(0), ninstance(0)
+{}
+
+Level::SubComponentUsage::SubComponentUsage(variant node) : dest_area(node["dest_area"]), ncomponent(node["ncomponent"].as_int(0)), ninstance(node["ninstance"].as_int(0))
+{}
+
+const Level::SubComponent& Level::SubComponentUsage::getSubComponent(const Level& lvl) const
+{
+	assert(ncomponent < lvl.getSubComponents().size());
+	return lvl.getSubComponents()[ncomponent];
+}
+
+rect Level::SubComponentUsage::getSourceArea(const Level& lvl) const
+{
+	const auto& sub = getSubComponent(lvl);
+	rect res = sub.source_area;
+	return rect(res.x() + (res.w() + TileSize*4)*(ninstance%sub.num_variations), res.y(), res.w(), res.h());
+}
+
+variant Level::SubComponentUsage::write() const
+{
+	variant_builder res;
+	res.add("dest_area", dest_area.write());
+	res.add("ncomponent", ncomponent);
+	res.add("ninstance", ninstance);
+	return res.build();
+}
+
+std::vector<Level::SubComponentUsage> Level::getSubComponentUsagesOrdered() const
+{
+	//sub component usages all copy their data in.
+	//Resolve the sub component usages in the correct order by
+	//searching for a sub component usage which doesn't have 
+	//any unresolved usages that map into its source.
+	std::vector<SubComponentUsage> usages = getSubComponentUsages();
+	std::vector<SubComponentUsage> result;
+
+	while(usages.empty() == false) {
+		int ntries = 0;
+		size_t ncandidate = 0;
+		bool new_candidate = true;
+		while(new_candidate && ntries < usages.size()) {
+
+			const rect& source_area = usages[ncandidate].getSourceArea(*this);
+
+			new_candidate = false;
+			for(size_t n = 0; n != usages.size(); ++n) {
+				if(n == ncandidate) {
+					continue;
+				}
+
+				if(rects_intersect(usages[n].dest_area, source_area)) {
+					new_candidate = true;
+					ncandidate = n;
+					++ntries;
+					break;
+				}
+			}
+		}
+
+		result.push_back(usages[ncandidate]);
+		usages.erase(usages.begin() + ncandidate);
+	}
+
+	return result;
+}
+
+void Level::applySubComponents()
+{
+	std::vector<int> layers;
+	for(const SubComponentUsage& usage : getSubComponentUsagesOrdered()) {
+		const rect& dst = usage.dest_area;
+		const rect& src = usage.getSourceArea(*this);
+
+		const rect tile_src(src.x(), src.y(), src.w()-TileSize, src.h()-TileSize);
+		const rect tile_dst(dst.x(), dst.y(), dst.w()-TileSize, dst.h()-TileSize);
+
+		std::map<int, std::vector<std::string> > src_tiles, dst_tiles;
+		getAllTilesRect(tile_src.x(), tile_src.y(), tile_src.x2(), tile_src.y2(), src_tiles);
+		getAllTilesRect(tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2(), dst_tiles);
+
+		clear_tile_rect(tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2());
+
+		for(auto& p : src_tiles) {
+			addTileRectVector(p.first, tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2(), p.second);
+			layers.push_back(p.first);
+		}
+	
+		std::vector<EntityPtr> chars = get_chars();
+		for(auto c : chars) {
+			if(c->x() >= dst.x() && c->x() <= dst.x2() && c->y() >= dst.y() && c->y() <= dst.y2()) {
+				remove_character(c);
+			}
+		}
+
+		chars = get_chars();
+		for(auto c : chars) {
+			if(c->x() >= src.x() && c->x() <= src.x2() && c->y() >= src.y() && c->y() <= src.y2()) {
+				auto clone = c->clone();
+				clone->shiftPosition(dst.x() - src.x(), dst.y() - src.y());
+				add_character(clone);
+			}
+		}
+	}
+
+	std::sort(layers.begin(), layers.end());
+
+	layers.erase(std::unique(layers.begin(), layers.end()), layers.end());
+
+	if(layers.empty() == false) {
+		start_rebuild_tiles_in_background(layers);
+		while(complete_rebuild_tiles_in_background() == false) {
+		}
+	}
+}
+
 Level::Level(const std::string& level_cfg, variant node)
 	: id_(level_cfg),
-	  x_resolution_(0), 
-	  y_resolution_(0),
-	  absolute_object_adjust_x_(0),
-	  absolute_object_adjust_y_(0),
-	  set_screen_resolution_on_entry_(false),
-	  highlight_layer_(std::numeric_limits<int>::min()),
-	  num_compiled_tiles_(0),
-	  entered_portal_active_(false), 
-	  save_point_x_(-1), 
-	  save_point_y_(-1),
-	  editor_(false), 
-	  show_foreground_(true), 
-	  show_background_(true), 
-	  dark_(false), 
-	  dark_color_(KRE::ColorTransform(255, 255, 255, 255, 0, 0, 0, 255)), 
-	  air_resistance_(0), 
-	  water_resistance_(7), 
-	  end_game_(false),
-      editor_tile_updates_frozen_(0), 
-	  editor_dragging_objects_(false),
-	  zoom_level_(1.0f),
+	x_resolution_(0),
+	y_resolution_(0),
+	absolute_object_adjust_x_(0),
+	absolute_object_adjust_y_(0),
+	set_screen_resolution_on_entry_(false),
+	highlight_layer_(std::numeric_limits<int>::min()),
+	num_compiled_tiles_(0),
+	entered_portal_active_(false),
+	save_point_x_(-1),
+	save_point_y_(-1),
+	editor_(false),
+	show_foreground_(true),
+	show_background_(true),
+	dark_(false),
+	dark_color_(KRE::ColorTransform(255, 255, 255, 255, 0, 0, 0, 255)),
+	air_resistance_(0),
+	water_resistance_(7),
+	end_game_(false),
+	editor_tile_updates_frozen_(0),
+	editor_dragging_objects_(false),
+	zoom_level_(1.0f),
+	instant_zoom_level_set_(-1),
 	  palettes_used_(0),
 	  background_palette_(-1),
 	  segment_width_(0), 
@@ -242,10 +362,10 @@ Level::Level(const std::string& level_cfg, variant node)
 
 		try {
 			const assert_recover_scope safe_scope;
-			rt_ = KRE::RenderTarget::create(gs.getWidth(), gs.getHeight(), 1, false, true);
+			rt_ = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight(), 1, false, true);
 		} catch(validation_failure_exception& /*e*/) {
 			LOG_INFO("Could not create fbo with stencil buffer. Trying without stencil buffer");
-			rt_ = KRE::RenderTarget::create(gs.getWidth(), gs.getHeight(), 1, false, false);
+			rt_ = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight(), 1, false, false);
 		}
 
 		if(rt_ != nullptr) {
@@ -270,7 +390,20 @@ Level::Level(const std::string& level_cfg, variant node)
 	variant player_save_node;
 	ASSERT_LOG(node.is_null() == false, "LOAD LEVEL WML FOR " << level_cfg << " FAILED");
 	if(node.has_key("id")) {
+
 		id_ = node["id"].as_string();
+
+		if(level_cfg.size() > 4 && std::equal(level_cfg.begin(), level_cfg.begin()+4, "save") == false) {
+			ASSERT_LOG(level_cfg == id_, "Level file " << level_cfg << " has incorrect id: " << id_);
+		}
+	}
+
+	for(variant v : node["sub_components"].as_list_optional()) {
+		sub_components_.push_back(SubComponent(v));
+	}
+
+	for(variant v : node["sub_component_usages"].as_list_optional()) {
+		sub_component_usages_.push_back(SubComponentUsage(v));
 	}
 
 	if(preferences::load_compiled() && (level_cfg == "save.cfg" || level_cfg == "autosave.cfg")) {
@@ -324,6 +457,7 @@ Level::Level(const std::string& level_cfg, variant node)
 	y_resolution_ = node["y_resolution"].as_int();
 	set_screen_resolution_on_entry_ = node["set_screen_resolution_on_entry"].as_bool(false);
 	in_dialog_ = false;
+	constrain_camera_ = true;
 	title_ = node["title"].as_string_default();
 	if(node.has_key("dimensions")) {
 		boundaries_ = rect(node["dimensions"]);
@@ -351,7 +485,7 @@ Level::Level(const std::string& level_cfg, variant node)
 
 	camera_rotation_ = game_logic::Formula::createOptionalFormula(node["camera_rotation"]);
 
-	preloads_ = util::split(node["preloads"].as_string());
+	preloads_ = util::split(node["preloads"].as_string_default(""));
 
 	std::string empty_solid_info;
 	for(variant rect_node : node["solid_rect"].as_list()) {
@@ -429,7 +563,7 @@ Level::Level(const std::string& level_cfg, variant node)
 
 	if(node.has_key("hex_map")) {
 		ASSERT_LOG(scene_graph_ != nullptr, "Couldn't instantiate a HexMap object, scenegraph was nullptr");
-		hex_map_ = hex::HexMap::factory(node["hex_map"]);
+		hex_map_ = hex::HexMap::create(node["hex_map"]);
 		hex_renderable_ = std::dynamic_pointer_cast<hex::MapNode>(scene_graph_->createNode("hex_map"));
 		hex_map_->setRenderable(hex_renderable_);
 		scene_graph_->getRootNode()->attachNode(hex_renderable_);
@@ -508,7 +642,7 @@ Level::Level(const std::string& level_cfg, variant node)
 	sub_level_str_ = node["sub_levels"].as_string_default();
 	for(const std::string& sub_lvl : util::split(sub_level_str_)) {
 		sub_level_data& data = sub_levels_[sub_lvl];
-		data.lvl = boost::intrusive_ptr<Level>(new Level(sub_lvl + ".cfg"));
+		data.lvl = ffl::IntrusivePtr<Level>(new Level(sub_lvl + ".cfg"));
 		for(int layer : data.lvl->layers_) {
 			layers_.insert(layer);
 		}
@@ -540,6 +674,8 @@ Level::Level(const std::string& level_cfg, variant node)
 	const int time_taken_ms = (profile::get_tick_time() - start_time);
 	stats::Entry("load", id()).set("time", variant(time_taken_ms));
 	LOG_INFO("done level constructor: " << time_taken_ms);
+
+
 }
 
 Level::~Level()
@@ -575,6 +711,30 @@ void Level::setRenderToTexture(int width, int height)
 			rt_ = KRE::RenderTarget::create(width, height, 1, false, false);
 			rt_->setBlendState(false);
 		}
+}
+
+namespace {
+	int g_num_level_transition_frames = 0;
+	decimal g_level_transition_ratio;
+}
+
+int Level::setup_level_transition(const std::string& transition_type)
+{
+	g_num_level_transition_frames = 0;
+
+	game_logic::MapFormulaCallablePtr callable(new game_logic::MapFormulaCallable());
+	callable->add("transition", variant(transition_type));
+	std::vector<EntityPtr> active_chars = get_active_chars();
+	for(const auto& c : active_chars) {
+		c->handleEvent(OBJECT_EVENT_BEGIN_TRANSITION_LEVEL, callable.get());
+	}
+
+	return g_num_level_transition_frames;
+}
+
+void Level::set_level_transition_ratio(decimal d)
+{
+	g_level_transition_ratio = d;
 }
 
 void Level::read_compiled_tiles(variant node, std::vector<LevelTile>::iterator& out)
@@ -659,6 +819,17 @@ PREF_BOOL(respect_difficulty, false, "");
 
 void Level::finishLoading()
 {
+	if(sub_component_usages_.empty() == false) {
+		if(!editor_) {
+			for(SubComponentUsage& usage : sub_component_usages_) {
+				const SubComponent& sub = usage.getSubComponent(*this);
+				usage.ninstance = rng::generate()%sub.num_variations;
+			}
+		}
+
+		applySubComponents();
+	}
+
 	assert(refcount() > 0);
 	CurrentLevelScope level_scope(this);
 
@@ -720,7 +891,7 @@ void Level::finishLoading()
 	//graphics::texture::build_textures_from_worker_threads();
 
 	if (editor_ || preferences::compiling_tiles) {
-		game_logic::set_verbatim_string_expressions (true);
+		//game_logic::set_verbatim_string_expressions (true);
 	}
 
 	std::vector<EntityPtr> objects_not_in_level;
@@ -731,28 +902,40 @@ void Level::finishLoading()
 		for(variant obj_node : node["character"].as_list()) {
 			game_logic::WmlSerializableFormulaCallablePtr obj;
 
-			std::string addr_str;
+			boost::uuids::uuid obj_uuid;
 
 			if(obj_node.is_map()) {
-				addr_str = obj_node["_addr"].as_string();
+
 				EntityPtr e(Entity::build(obj_node));
 				objects_not_in_level.push_back(e);
 				obj = e;
+
+				if(obj_node.has_key("_addr")) {
+					//convert old style _addr to uuid.
+					obj_uuid = addr_to_uuid(obj_node["_addr"].as_string());
+				} else {
+					obj_uuid = obj->uuid();
+				}
 			} else {
 				obj = obj_node.try_convert<game_logic::WmlSerializableFormulaCallable>();
-				addr_str = obj->addr();
+				obj_uuid = obj->uuid();
 			}
-			const intptr_t addr_id = static_cast<intptr_t>(strtoll(addr_str.c_str(), nullptr, 16));
 
-			game_logic::wmlFormulaCallableReadScope::registerSerializedObject(addr_id, obj);
+			game_logic::wmlFormulaCallableReadScope::registerSerializedObject(obj_uuid, obj);
 		}
 	}
 
 	for(variant node : wml_chars_) {
 		load_character(node);
 
-		const intptr_t addr_id = static_cast<intptr_t>(strtoll(node["_addr"].as_string().c_str(), nullptr, 16));
-		game_logic::wmlFormulaCallableReadScope::registerSerializedObject(addr_id, chars_.back());
+		boost::uuids::uuid obj_uuid;
+		if(node.has_key("_addr")) {
+			obj_uuid = addr_to_uuid(node["_addr"].as_string());
+		} else {
+			obj_uuid = read_uuid(node["_uuid"].as_string());
+		}
+
+		game_logic::wmlFormulaCallableReadScope::registerSerializedObject(obj_uuid, chars_.back());
 
 		if(node.has_key("attached_objects")) {
 			LOG_INFO("LOADING ATTACHED: " << node["attached_objects"].as_string());
@@ -760,8 +943,8 @@ void Level::finishLoading()
 			std::vector<std::string> v = util::split(node["attached_objects"].as_string());
 			for(const std::string& s : v) {
 				LOG_INFO("ATTACHED: " << s);
-				const intptr_t addr_id = static_cast<intptr_t>(strtoll(s.c_str(), nullptr, 16));
-				game_logic::WmlSerializableFormulaCallablePtr obj = game_logic::wmlFormulaCallableReadScope::getSerializedObject(addr_id);
+				boost::uuids::uuid attached_uuid = addr_to_uuid(s);
+				game_logic::WmlSerializableFormulaCallablePtr obj = game_logic::wmlFormulaCallableReadScope::getSerializedObject(attached_uuid);
 				Entity* e = dynamic_cast<Entity*>(obj.get());
 				if(e) {
 					LOG_INFO("GOT ATTACHED\n");
@@ -917,6 +1100,8 @@ namespace
 	std::map<const Level*, level_tile_rebuild_info> tile_rebuild_map;
 
 	void build_tiles_thread_function(level_tile_rebuild_info* info, std::map<int, TileMap> tile_maps, threading::mutex& sync) {
+		std::lock_guard<std::mutex> lock(GarbageCollector::getGlobalMutex());
+
 		info->task_tiles.clear();
 
 		if(info->rebuild_tile_layers_worker_buffer.empty()) {
@@ -1026,17 +1211,37 @@ void Level::setPlayerVariantType(variant type_str)
 	entry->setVariantType(g_player_type);
 }
 
-void Level::complete_rebuild_tiles_in_background()
+namespace {
+struct TileBackupScope {
+	std::vector<LevelTile>& level_tiles;
+	std::vector<LevelTile> tiles;
+	bool cancelled;
+	TileBackupScope(std::vector<LevelTile>& t) : level_tiles(t), tiles(t), cancelled(false) {
+	}
+
+	~TileBackupScope() {
+		if(!cancelled) {
+			level_tiles.swap(tiles);
+		}
+	}
+
+	void cancel() {
+		cancelled = true;
+	}
+};
+}
+
+bool Level::complete_rebuild_tiles_in_background()
 {
 	level_tile_rebuild_info& info = tile_rebuild_map[this];
 	if(!info.tile_rebuild_in_progress) {
-		return;
+		return true;
 	}
 
 	{
 		threading::lock l(info.tile_rebuild_complete_mutex);
 		if(!info.tile_rebuild_complete) {
-			return;
+			return false;
 		}
 	}
 
@@ -1045,6 +1250,8 @@ void Level::complete_rebuild_tiles_in_background()
 //	ASSERT_LOG(rebuild_tile_thread, "REBUILD TILE THREAD IS nullptr");
 	delete info.rebuild_tile_thread;
 	info.rebuild_tile_thread = nullptr;
+
+	TileBackupScope backup(tiles_);
 
 	if(info.rebuild_tile_layers_worker_buffer.empty()) {
 		tiles_.clear();
@@ -1058,19 +1265,24 @@ void Level::complete_rebuild_tiles_in_background()
 	tiles_.insert(tiles_.end(), info.task_tiles.begin(), info.task_tiles.end());
 	info.task_tiles.clear();
 
-	complete_tiles_refresh();
-
 	LOG_INFO("COMPLETE TILE REBUILD: " << (profile::get_tick_time() - begin_time));
 
 	info.rebuild_tile_layers_worker_buffer.clear();
 
 	info.tile_rebuild_in_progress = false;
+
+	++g_tile_rebuild_state_id;
+
+	complete_tiles_refresh();
+
+	backup.cancel();
+
 	if(info.tile_rebuild_queued) {
 		info.tile_rebuild_queued = false;
 		start_rebuild_tiles_in_background(info.rebuild_tile_layers_buffer);
 	}
 
-	++g_tile_rebuild_state_id;
+	return true;
 }
 
 void Level::rebuildTiles()
@@ -1206,6 +1418,24 @@ variant Level::write() const
 	res.add("music", music_);
 	res.add("segment_width", segment_width_);
 	res.add("segment_height", segment_height_);
+
+	if(sub_components_.empty() == false) {
+		std::vector<variant> sub;
+		for(const auto& c : sub_components_) {
+			sub.push_back(c.write());
+		}
+
+		res.add("sub_components", variant(&sub));
+	}
+
+	if(sub_component_usages_.empty() == false) {
+		std::vector<variant> sub;
+		for(const auto& c : sub_component_usages_) {
+			sub.push_back(c.write());
+		}
+
+		res.add("sub_component_usages", variant(&sub));
+	}
 
 	if(x_resolution_ || y_resolution_) {
 		res.add("x_resolution", x_resolution_);
@@ -1703,10 +1933,10 @@ void Level::prepare_tiles_for_drawing()
 		}
 
 		//in the editor we want to draw the whole level, so don't exclude
-		//things outside the level bounds.
-		if(!editor_ && (tiles_[n].x <= boundaries().x() - TileSize || tiles_[n].y <= boundaries().y() - TileSize || tiles_[n].x >= boundaries().x2() || tiles_[n].y >= boundaries().y2())) {
-			continue;
-		}
+		//things outside the level bounds. Also if the camera is unconstrained
+//		if(!editor_ && (tiles_[n].x <= boundaries().x() - TileSize || tiles_[n].y <= boundaries().y() - TileSize || tiles_[n].x >= boundaries().x2() || tiles_[n].y >= boundaries().y2())) {
+//			continue;
+//		}
 
 		std::shared_ptr<LayerBlitInfo>& blit_cache_info_ptr = blit_cache_[tiles_[n].zorder];
 		if(blit_cache_info_ptr == nullptr) {
@@ -1730,9 +1960,9 @@ void Level::prepare_tiles_for_drawing()
 	std::map<int, std::pair<std::vector<tile_corner>, std::vector<tile_corner>>> vertices_ot;
 
 	for(int n = 0; n != tiles_.size(); ++n) {
-		if(!editor_ && (tiles_[n].x <= boundaries().x() - TileSize || tiles_[n].y <= boundaries().y() - TileSize || tiles_[n].x >= boundaries().x2() || tiles_[n].y >= boundaries().y2())) {
-			continue;
-		}
+//		if(!editor_ && (tiles_[n].x <= boundaries().x() - TileSize || tiles_[n].y <= boundaries().y() - TileSize || tiles_[n].x >= boundaries().x2() || tiles_[n].y >= boundaries().y2())) {
+//			continue;
+//		}
 
 		if(!is_arcade_level() && tiles_[n].object->getSolidColor()) {
 			tiles_[n].draw_disabled = true;
@@ -1875,6 +2105,8 @@ int g_camera_extend_x, g_camera_extend_y;
 
 void Level::draw(int x, int y, int w, int h) const
 {
+	formula_profiler::Instrument instrument_prepare("LEVEL_PREPARE_DRAW");
+
 	auto wnd = KRE::WindowManager::getMainWindow();
 	if(shader_) {
 		ASSERT_LOG(false, "apply shader_ here");
@@ -1897,7 +2129,10 @@ void Level::draw(int x, int y, int w, int h) const
 	h += highest_tile_;
 	
 	{
-		std::sort(active_chars_.begin(), active_chars_.end(), zorder_compare);
+		{
+		formula_profiler::Instrument instrument_sort("LEVEL_SORT");
+		std::sort(active_chars_.begin(), active_chars_.end(), EntityZOrderCompare());
+		}
 
 		const std::vector<EntityPtr>* chars_ptr = &active_chars_;
 		std::vector<EntityPtr> editor_chars_buf;
@@ -1932,15 +2167,17 @@ void Level::draw(int x, int y, int w, int h) const
 			water_zorder = water_->zorder();
 		}
 
+		auto& gs = graphics::GameScreen::get();
+
 		for(auto mask : hex_masks_) {
 			KRE::RenderTargetPtr rt = mask->getRenderTarget();
 			if(rt.get() == nullptr) {
-				rt = KRE::RenderTarget::create(wnd->width(), wnd->height());
+				rt = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight());
 				mask->setRenderTarget(rt);
 			}
 
 			{
-				KRE::RenderTarget::RenderScope scope(rt, rect(0, 0, wnd->width(), wnd->height()));
+				KRE::RenderTarget::RenderScope scope(rt, rect(0, 0, gs.getVirtualWidth(), gs.getVirtualHeight()));
 				rt->setClearColor(KRE::Color(0,0,0,0));
 				rt->clear();
 
@@ -1970,9 +2207,17 @@ void Level::draw(int x, int y, int w, int h) const
 			rmanager_->render(KRE::WindowManager::getMainWindow());
 		}
 
+		instrument_prepare.finish();
+
 		std::set<int>::const_iterator layer = layers_.begin();
 
 		for(; layer != layers_.end(); ++layer) {
+			if (*layer >= g_debug_skip_draw_zorder_begin && *layer < g_debug_skip_draw_zorder_end) {
+				continue;
+			}
+
+			formula_profiler::Instrument instrument(formula_profiler::Instrument::generate_id("ZORDER", *layer));
+
 			frameBufferEnterZorder(*layer);
 			const bool alpha_test = *layer >= begin_alpha_test && *layer < end_alpha_test;
 			graphics::set_alpha_test(alpha_test);
@@ -1984,9 +2229,15 @@ void Level::draw(int x, int y, int w, int h) const
 				water_drawn = true;
 			}
 
+			{
+
+			CustomObjectDrawZOrderManager draw_manager;
+
 			while(entity_itor != chars.end() && (*entity_itor)->zorder() <= *layer) {
 				draw_entity(**entity_itor, x, y, editor_);
 				++entity_itor;
+			}
+
 			}
 
 			draw_layer(*layer, x, y, w, h);
@@ -2136,11 +2387,19 @@ void Level::frameBufferEnterZorder(int zorder) const
 void Level::flushFrameBufferShadersToScreen() const
 {
 	for(int n = 0; n != active_fb_shaders_.size(); ++n) {
-		applyShaderToFrameBufferTexture(active_fb_shaders_[n], n == active_fb_shaders_.size()-1);
+		KRE::RenderTargetPtr& fb = applyShaderToFrameBufferTexture(active_fb_shaders_[n], n == active_fb_shaders_.size()-1);
+
+		const FrameBufferShaderEntry* entry = nullptr;
+		for(const FrameBufferShaderEntry& e : fb_shaders_) {
+			if(e.shader == active_fb_shaders_[n]) {
+				entry = &e;
+				break;
+			}
+		}
 	}
 }
 
-void Level::applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, bool render_to_screen) const
+KRE::RenderTargetPtr& Level::applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, bool render_to_screen) const
 {
 	if(render_to_screen) {
 		rt_->renderToPrevious();
@@ -2151,10 +2410,10 @@ void Level::applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, boo
 		if(!backup_rt_) {
 			try {
 				const assert_recover_scope safe_scope;
-				backup_rt_ = KRE::RenderTarget::create(gs.getWidth(), gs.getHeight(), 1, false, true);			
+				backup_rt_ = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight(), 1, false, true);			
 			} catch(validation_failure_exception& /*e*/) {
 				LOG_INFO("Could not create fbo with stencil buffer. Trying without stencil buffer");
-				backup_rt_ = KRE::RenderTarget::create(gs.getWidth(), gs.getHeight(), 1, false, false);
+				backup_rt_ = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight(), 1, false, false);
 			}
 			ASSERT_LOG(backup_rt_ != nullptr, "Backup render target was null.");
 			if(fb_render_target_.is_null()) {
@@ -2173,17 +2432,26 @@ void Level::applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, boo
 
 	auto wnd = KRE::WindowManager::getMainWindow();
 
+	auto& gs = graphics::GameScreen::get();
+
 	rt_->setShader(shader->getShader());
-	shader->setDrawArea(rect(0, 0, wnd->width(), wnd->height()));
+	shader->setDrawArea(rect(0, 0, gs.getVirtualWidth(), gs.getVirtualHeight()));
 	shader->setCycle(cycle());
+
 	if(preferences::screen_rotated()) {
 		rt_->setRotation(0, glm::vec3(0.0f, 0.0f, 1.0f));
 	}
+
+	rt_->clearBlendState();
+	KRE::BlendModeScope blend_scope(KRE::BlendModeConstants::BM_SRC_ALPHA, KRE::BlendModeConstants::BM_ONE_MINUS_SRC_ALPHA);
 	rt_->preRender(wnd);
 	wnd->render(rt_.get());
 
 	if(!render_to_screen) {
 		std::swap(rt_, backup_rt_);
+		return backup_rt_;
+	} else {
+		return rt_;
 	}
 }
 
@@ -2211,14 +2479,23 @@ void Level::calculateLighting(int x, int y, int w, int h) const
 		}
 	}
 
-	static auto rt = KRE::RenderTarget::create(wnd->width(), wnd->height());
+	auto& gs = graphics::GameScreen::get();
+	static KRE::RenderTargetPtr rt;
+	static int rt_width = -1;
+	static int rt_height = -1;
+
+	if (gs.getVirtualWidth() != rt_width || gs.getVirtualHeight() != rt_height) {
+		rt = KRE::RenderTarget::create(gs.getVirtualWidth(), gs.getVirtualHeight());
+		rt_width = gs.getVirtualWidth();
+		rt_height = gs.getVirtualHeight();
+	}
 
 	{
 		KRE::BlendModeScope blend_scope(KRE::BlendModeConstants::BM_ONE, KRE::BlendModeConstants::BM_ONE);
 		//rect screen_area(x, y, w, h);
 		
 		rt->setClearColor(dark_color_.applyBlack());
-		KRE::RenderTarget::RenderScope scope(rt, rect(0, 0, wnd->width(), wnd->height()));
+		KRE::RenderTarget::RenderScope scope(rt, rect(0, 0, gs.getVirtualWidth(), gs.getVirtualHeight()));
 
 		rt->clear();
 
@@ -2280,7 +2557,7 @@ void Level::draw_debug_solid(int x, int y, int w, int h) const
 	}
 }
 
-void Level::draw_background(int x, int y, int rotation) const
+void Level::draw_background(int x, int y, int rotation, float xdelta, float ydelta) const
 {
 	if(show_background_ == false) {
 		return;
@@ -2298,14 +2575,16 @@ void Level::draw_background(int x, int y, int rotation) const
 
 		static std::vector<rect> opaque_areas;
 		opaque_areas.clear();
-		int screen_width = wnd->width();
-		int screen_height = wnd->height();
+
+		auto& gs = graphics::GameScreen::get();
+		int screen_width = gs.getVirtualWidth();
+		int screen_height = gs.getVirtualHeight();
 		if(last_draw_position().zoom < 1.0) {
 			screen_width = static_cast<int>(screen_width / last_draw_position().zoom);
 			screen_height = static_cast<int>(screen_height / last_draw_position().zoom);
 		}
 
-		rect screen_area(x, y, screen_width, screen_height);
+		rect screen_area(x - xdelta, y - ydelta, screen_width + xdelta*2, screen_height + ydelta*2);
 		for(const rect& r : opaque_rects_) {
 			if(rects_intersect(r, screen_area)) {
 
@@ -2328,7 +2607,7 @@ void Level::draw_background(int x, int y, int rotation) const
 				}
 			}
 		}
-		background_->draw(x, y, screen_area, opaque_areas, static_cast<float>(rotation), cycle());
+		background_->draw(x, y, screen_area, opaque_areas, static_cast<float>(rotation), xdelta, ydelta, cycle());
 	} else {
 		wnd->setClearColor(KRE::Color(0.0f, 0.0f, 0.0f, 0.0f));
 		wnd->clear(KRE::ClearFlags::COLOR);
@@ -2383,19 +2662,34 @@ void Level::process()
 
 	sound::process();
 	
+	auto& gs = graphics::GameScreen::get();
+	if(rt_ && rt_->needsRebuild()) {
+		rt_->rebuild(gs.getVirtualWidth(), gs.getVirtualHeight());
+	}
+	if(backup_rt_ && backup_rt_->needsRebuild()) {
+		backup_rt_->rebuild(gs.getVirtualWidth(), gs.getVirtualHeight());
+	}
+	for(auto mask : hex_masks_) {
+		KRE::RenderTargetPtr rt = mask->getRenderTarget();
+		if(rt && rt->needsRebuild()) {
+			auto& gs = graphics::GameScreen::get();
+			rt->rebuild(gs.getVirtualWidth(), gs.getVirtualHeight());
+		}
+	}
+
 	if(shader_) {
 		shader_->process();
-	}
-	
-	for(auto& fb : fb_shaders_) {
-		if(fb.shader) {
-			fb.shader->process();
-		}
 	}
 }
 
 void Level::process_draw()
 {
+	for(auto& fb : fb_shaders_) {
+		if(fb.shader) {
+			fb.shader->process();
+		}
+	}
+
 	std::vector<EntityPtr> chars = active_chars_;
 	for(const EntityPtr& e : chars) {
 		e->handleEvent(OBJECT_EVENT_DRAW);
@@ -2422,8 +2716,8 @@ namespace
 
 void Level::set_active_chars()
 {
-	int screen_width = graphics::GameScreen::get().getWidth();
-	int screen_height = graphics::GameScreen::get().getHeight();
+	int screen_width = graphics::GameScreen::get().getVirtualWidth();
+	int screen_height = graphics::GameScreen::get().getVirtualHeight();
 	
 	const float inverse_zoom_level = std::abs(zoom_level_) > FLT_EPSILON ? (1.0f / zoom_level_) : 0.0f;
 	// pad the screen if we're zoomed out so stuff now-visible becomes active  
@@ -2501,10 +2795,12 @@ void Level::do_processing()
 		active_chars = chars_immune_from_time_freeze_;
 	}
 
+	{
+	formula_profiler::Instrument instrumentation("CHARS_PROCESS");
 	while(!active_chars.empty()) {
 		new_chars_.clear();
 		for(const EntityPtr& c : active_chars) {
-			if(!c->destroyed() && (chars_by_label_.count(c->label()) || c->isHuman())) {
+			if(!c->destroyed()) {
 				c->process(*this);
 			}
 	
@@ -2520,6 +2816,7 @@ void Level::do_processing()
 		active_chars = new_chars_;
 		active_chars_.insert(active_chars_.end(), new_chars_.begin(), new_chars_.end());
 	}
+	}
 
 	if(water_) {
 		water_->process(*this);
@@ -2530,6 +2827,7 @@ void Level::do_processing()
 
 void Level::erase_char(EntityPtr c)
 {
+	c->beingRemoved();
 
 	if(c->label().empty() == false) {
 		chars_by_label_.erase(c->label());
@@ -3074,6 +3372,7 @@ void Level::remove_character(EntityPtr e)
 	chars_.erase(std::remove(chars_.begin(), chars_.end(), e), chars_.end());
 	solid_chars_.erase(std::remove(solid_chars_.begin(), solid_chars_.end(), e), solid_chars_.end());
 	active_chars_.erase(std::remove(active_chars_.begin(), active_chars_.end(), e), active_chars_.end());
+	new_chars_.erase(std::remove(new_chars_.begin(), new_chars_.end(), e), new_chars_.end());
 }
 
 std::vector<EntityPtr> Level::get_characters_in_rect(const rect& r, int screen_xpos, int screen_ypos) const
@@ -3256,22 +3555,32 @@ void Level::add_multi_player(EntityPtr p)
 
 void Level::add_player(EntityPtr p)
 {
-	if(player_) {
-		if(player_ != p) {
-			player_->beingRemoved();
+	const int nslot = p->getPlayerInfo()->getPlayerSlot();
+
+	if(players_.size() > nslot && players_[nslot]) {
+		if(players_[nslot] != p) {
+			players_[nslot]->beingRemoved();
 		}
-		chars_.erase(std::remove(chars_.begin(), chars_.end(), player_), chars_.end());
+
+		if(players_[nslot]->label().empty() == false) {
+			chars_by_label_.erase(players_[nslot]->label());
+		}
+
+		chars_.erase(std::remove(chars_.begin(), chars_.end(), players_[nslot]), chars_.end());
+	}
+
+	if(LevelRunner::getCurrent()) {
+		LevelRunner::getCurrent()->on_player_set(p);
 	}
 
 	last_touched_player_ = player_ = p;
 	ASSERT_LOG(!g_player_type || g_player_type->match(variant(p.get())), "Player object being added to level does not match required player type. " << p->getDebugDescription() << " is not a " << g_player_type->to_string());
-	if(players_.empty()) {
+	if(players_.size() <= nslot) {
 		player_->getPlayerInfo()->setPlayerSlot(static_cast<int>(players_.size()));
 		players_.push_back(player_);
 	} else {
 		ASSERT_LOG(player_->isHuman(), "Level::add_player(): Tried to add player to the level that isn't human.");
-		player_->getPlayerInfo()->setPlayerSlot(0);
-		players_[0] = player_;
+		players_[nslot] = player_;
 	}
 
 	p->addToLevel();
@@ -3458,10 +3767,15 @@ void Level::set_background_by_id(const std::string& id)
 }
 
 BEGIN_DEFINE_CALLABLE_NOBASE(Level)
+DEFINE_FIELD(title, "string")
+	return variant(obj.title());
+DEFINE_FIELD(music, "string")
+	return variant(obj.music());
 DEFINE_FIELD(cycle, "int")
 	return variant(obj.cycle_);
 DEFINE_SET_FIELD
 	obj.cycle_ = value.as_int();
+	controls::new_level(obj.cycle_, obj.players_.empty() ? 1 : static_cast<int>(obj.players_.size()), multiplayer::slot());
 DEFINE_FIELD(player, "custom_obj")
 	ASSERT_LOG(obj.last_touched_player_, "No player found in level");
 	return variant(obj.last_touched_player_.get());
@@ -3471,7 +3785,7 @@ DEFINE_FIELD(player_info, "object")
 	ASSERT_LOG(obj.last_touched_player_, "No player found in level");
 	return variant(obj.last_touched_player_.get());
 DEFINE_FIELD(in_dialog, "bool")
-	//boost::intrusive_ptr<const game_logic::FormulaCallableDefinition> def(variant_type::get_builtin("level")->getDefinition());
+	//ffl::IntrusivePtr<const game_logic::FormulaCallableDefinition> def(variant_type::get_builtin("level")->getDefinition());
 	return variant::from_bool(obj.in_dialog_);
 DEFINE_FIELD(local_player, "null|custom_obj")
 	ASSERT_LOG(obj.player_, "No player found in level");
@@ -3496,12 +3810,35 @@ DEFINE_FIELD(players, "[custom_obj]")
 		v.push_back(variant(e.get()));
 	}
 	return variant(&v);
+DEFINE_SET_FIELD
+	std::vector<variant> list = value.as_list();
+	int nslot = 0;
+	for(variant p : list) {
+		EntityPtr pl(p.convert_to<Entity>());
+		pl->getPlayerInfo()->setPlayerSlot(nslot);
+		obj.add_character(pl);
+		++nslot;
+	}
+
 DEFINE_FIELD(in_editor, "bool")
-	return variant(obj.editor_);
+	return variant::from_bool(obj.editor_);
+DEFINE_FIELD(editor, "null|builtin editor")
+	if(LevelRunner::getCurrent()) {
+		return variant(LevelRunner::getCurrent()->get_editor().get());
+	}
+
+	return variant();
+	
 DEFINE_FIELD(zoom, "decimal")
 	return variant(obj.zoom_level_);
 DEFINE_SET_FIELD
 	obj.zoom_level_ = value.as_float();
+DEFINE_FIELD(instant_zoom, "decimal")
+return variant(obj.zoom_level_);
+DEFINE_SET_FIELD
+obj.zoom_level_ = value.as_float();
+obj.instant_zoom_level_set_ = obj.cycle_;
+
 DEFINE_FIELD(focus, "[custom_obj]")
 	std::vector<variant> v;
 	for(const EntityPtr& e : obj.focus_override_) {
@@ -3521,7 +3858,7 @@ DEFINE_SET_FIELD
 DEFINE_FIELD(id, "string")
 	return variant(obj.id_);
 
-DEFINE_FIELD(dimensions, "[int]")
+DEFINE_FIELD(dimensions, "[int,int,int,int]")
 	std::vector<variant> v;
 	v.push_back(variant(obj.boundaries_.x()));
 	v.push_back(variant(obj.boundaries_.y()));
@@ -3532,6 +3869,10 @@ DEFINE_SET_FIELD
 	ASSERT_EQ(value.num_elements(), 4);
 	obj.boundaries_ = rect(value[0].as_int(), value[1].as_int(), value[2].as_int() - value[0].as_int(), value[3].as_int() - value[1].as_int());
 
+DEFINE_FIELD(constrain_camera, "bool")
+	return variant::from_bool(obj.constrain_camera());
+DEFINE_SET_FIELD
+	obj.constrain_camera_ = value.as_bool();
 DEFINE_FIELD(music_volume, "decimal")
 	return variant(sound::get_engine_music_volume());
 DEFINE_SET_FIELD
@@ -3593,13 +3934,14 @@ DEFINE_FIELD(num_segments, "int")
 	return variant(unsigned(obj.sub_levels_.size()));
 
 DEFINE_FIELD(camera_position, "[int, int, int, int]")
-	auto wnd = KRE::WindowManager::getMainWindow();
 	std::vector<variant> pos;
 	pos.reserve(4);
 	pos.push_back(variant(last_draw_position().x/100));
 	pos.push_back(variant(last_draw_position().y/100));
-	pos.push_back(variant(wnd->width()));
-	pos.push_back(variant(wnd->height()));
+
+	auto& gs = graphics::GameScreen::get();
+	pos.push_back(variant(gs.getVirtualWidth()));
+	pos.push_back(variant(gs.getVirtualHeight()));
 	return variant(&pos);
 DEFINE_SET_FIELD_TYPE("[decimal,decimal]")
 
@@ -3766,7 +4108,7 @@ DEFINE_SET_FIELD_TYPE("null|map")
 	}
 
 	if(value.is_map()) {
-		obj.hex_map_ = hex::HexMap::factory(value);
+		obj.hex_map_ = hex::HexMap::create(value);
 		obj.hex_renderable_ = std::dynamic_pointer_cast<hex::MapNode>(obj.scene_graph_->createNode("hex_map"));
 		obj.hex_map_->setRenderable(obj.hex_renderable_);
 		obj.scene_graph_->getRootNode()->attachNode(obj.hex_renderable_);
@@ -3778,7 +4120,7 @@ DEFINE_SET_FIELD_TYPE("null|map")
 DEFINE_FIELD(hex_masks, "[builtin mask_node]")
 	std::vector<variant> result;
 	for(auto mask : obj.hex_masks_) {
-		result.push_back(variant(mask.get()));
+		result.emplace_back(variant(mask.get()));
 	}
 
 	return variant(&result);
@@ -3787,9 +4129,9 @@ DEFINE_SET_FIELD_TYPE("[map|builtin mask_node]")
 	obj.hex_masks_.clear();
 	for(auto v : items) {
 		if(v.is_map()) {
-			obj.hex_masks_.push_back(hex::MaskNodePtr(new hex::MaskNode(v)));
+			obj.hex_masks_.emplace_back(hex::MaskNodePtr(new hex::MaskNode(v)));
 		} else {
-			obj.hex_masks_.push_back(hex::MaskNodePtr(v.convert_to<hex::MaskNode>()));
+			obj.hex_masks_.emplace_back(hex::MaskNodePtr(v.convert_to<hex::MaskNode>()));
 		}
 
 		ASSERT_LOG(obj.hex_masks_.back().get() != nullptr, "null hex mask");
@@ -3817,6 +4159,34 @@ DEFINE_FIELD(absolute_object_adjust_y, "int")
 	return variant(obj.absolute_object_adjust_y_);
 DEFINE_SET_FIELD_TYPE("int")
 	obj.absolute_object_adjust_y_ = value.as_int();
+
+DEFINE_FIELD(quitting_game, "bool")
+	if(LevelRunner::getCurrent()) {
+		return variant::from_bool(LevelRunner::getCurrent()->is_quitting());
+	}
+
+	return variant::from_bool(false);
+
+DEFINE_SET_FIELD_TYPE("bool")
+	if(LevelRunner::getCurrent()) {
+		LevelRunner::getCurrent()->set_quitting(value.as_bool());
+	}
+
+DEFINE_FIELD(num_transition_frames, "int")
+	return variant(g_num_level_transition_frames);
+DEFINE_SET_FIELD_TYPE("int")
+	g_num_level_transition_frames = value.as_int();
+
+DEFINE_FIELD(transition_ratio, "decimal")
+	return variant(g_level_transition_ratio);
+
+DEFINE_FIELD(is_building_tiles, "bool")
+	level_tile_rebuild_info& info = tile_rebuild_map[&obj];
+	if(!info.tile_rebuild_in_progress) {
+		return variant::from_bool(false);
+	} else {
+		return variant::from_bool(true);
+	}
 
 END_DEFINE_CALLABLE(Level)
 
@@ -3953,9 +4323,11 @@ void Level::replay_from_cycle(int ncycle)
 	}
 }
 
-void Level::backup()
+PREF_BOOL(enable_history, true, "Allow editor history features");
+
+void Level::backup(bool force)
 {
-	if(backups_.empty() == false && backups_.back()->cycle == cycle_) {
+	if((!g_enable_history && !force) || (backups_.empty() == false && backups_.back()->cycle == cycle_)) {
 		return;
 	}
 
@@ -4144,7 +4516,7 @@ std::vector<EntityPtr> Level::predict_future(EntityPtr e, int ncycles)
 
 void Level::transfer_state_to(Level& lvl)
 {
-	backup();
+	backup(true);
 	lvl.restore_from_backup(*backups_.back());
 	backups_.pop_back();
 }
@@ -4204,6 +4576,11 @@ void Level::editor_freeze_tile_updates(bool value)
 float Level::zoom_level() const
 {
 	return zoom_level_;
+}
+
+bool Level::instant_zoom_level_set() const
+{
+	return instant_zoom_level_set_ >= cycle_-1;
 }
 
 void Level::add_speech_dialog(std::shared_ptr<SpeechDialog> d)
@@ -4497,6 +4874,67 @@ std::pair<std::vector<LevelTile>::const_iterator, std::vector<LevelTile>::const_
 	return std::equal_range(tiles_by_position_.begin(), tiles_by_position_.end(), loc, level_tile_pos_comparer());
 }
 
+int Level::addSubComponent(int w, int h)
+{
+	int xpos = 0;
+	int ypos = boundaries_.y2() + TileSize*4;
+
+	if(sub_components_.empty() == false) {
+		ypos = sub_components_.back().source_area.y2() + TileSize*4;
+	}
+
+	SubComponent sub;
+	sub.source_area = rect(xpos, ypos, w, h);
+	sub.num_variations = 1;
+	sub_components_.push_back(sub);
+	return sub_components_.size() - 1;
+}
+
+void Level::removeSubComponent(int nindex)
+{
+	if(nindex < 0) {
+		nindex = sub_components_.size() - 1;
+	}
+
+	if(nindex >= 0 && nindex < sub_components_.size()) {
+		sub_components_.erase(sub_components_.begin() + nindex);
+	}
+}
+
+void Level::addSubComponentVariations(int nindex, int ndelta)
+{
+	if(nindex >= 0 && nindex < sub_components_.size()) {
+		sub_components_[nindex].num_variations = std::max<int>(1, sub_components_[nindex].num_variations+ndelta);
+	}
+}
+
+void Level::setSubComponentArea(int nindex, const rect& area)
+{
+	if(nindex >= 0 && nindex < sub_components_.size()) {
+		sub_components_[nindex].source_area = area;
+	}
+}
+
+void Level::addSubComponentUsage(int nsub, const rect& area)
+{
+	SubComponentUsage usage;
+	usage.dest_area = area;
+	usage.ncomponent = nsub;
+	sub_component_usages_.push_back(usage);
+}
+
+void Level::updateSubComponentFromUsage(const SubComponentUsage& usage)
+{
+	ASSERT_LOG(usage.ncomponent >= 0 && usage.ncomponent < sub_components_.size(), "Illegal sub component usage: " << usage.ncomponent);
+
+	rect source_area = sub_components_[usage.ncomponent].source_area;
+
+	std::map<int, std::vector<std::string> > tiles;
+
+	getAllTilesRect(usage.dest_area.x(), usage.dest_area.y(), usage.dest_area.x2(), usage.dest_area.y2(), tiles);
+
+}
+
 game_logic::FormulaPtr Level::createFormula(const variant& v)
 {
 	// XXX Add symbol table here?
@@ -4590,7 +5028,7 @@ UTILITY(correct_solidity)
 			continue;
 		}
 
-		boost::intrusive_ptr<Level> lvl(new Level(file));
+		ffl::IntrusivePtr<Level> lvl(new Level(file));
 		lvl->finishLoading();
 		lvl->setAsCurrentLevel();
 
@@ -4629,7 +5067,7 @@ UTILITY(compile_levels)
 
 		const std::string& file = module::get_id(i->first);
 		LOG_INFO("LOADING LEVEL '" << file << "'");
-		boost::intrusive_ptr<Level> lvl(new Level(file));
+		ffl::IntrusivePtr<Level> lvl(new Level(file));
 		lvl->finishLoading();
 		lvl->record_zorders();
 		module::write_file("data/compiled/level/" + file, lvl->write().write_json(true));
@@ -4670,7 +5108,7 @@ BENCHMARK(load_all_levels)
 	module::get_files_in_dir(preferences::level_path(), &files);
 	BENCHMARK_LOOP {
 		for(const std::string& file : files) {
-			boost::intrusive_ptr<Level> lvl(new Level(file));
+			ffl::IntrusivePtr<Level> lvl(new Level(file));
 		}
 	}
 }
@@ -4682,7 +5120,7 @@ UTILITY(load_and_save_all_levels)
 	for(auto i : files) {
 		const std::string& file = i.first;
 		LOG_INFO("LOAD_LEVEL '" << file << "'");
-		boost::intrusive_ptr<Level> lvl(new Level(file));
+		ffl::IntrusivePtr<Level> lvl(new Level(file));
 		lvl->finishLoading();
 
 		const std::string path = get_level_path(file);

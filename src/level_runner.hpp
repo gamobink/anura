@@ -23,12 +23,13 @@
 
 #pragma once
 
-#include <boost/intrusive_ptr.hpp>
+#include "intrusive_ptr.hpp"
 
 #include <string>
 
 #include "button.hpp"
 #include "debug_console.hpp"
+#include "editor.hpp"
 #include "geometry.hpp"
 #include "level.hpp"
 #include "pause_game_dialog.hpp"
@@ -48,11 +49,13 @@ void removeProcessFunction(void* tag);
 
 void addAsynchronousWorkItem(std::function<void()> fn);
 
+void mapSDLEventScreenCoordinatesToVirtual(SDL_Event& event);
+
 class LevelRunner 
 {
 public:
 	static LevelRunner* getCurrent();
-	LevelRunner(boost::intrusive_ptr<Level>& lvl, std::string& level_cfg, std::string& original_level_cfg);
+	LevelRunner(ffl::IntrusivePtr<Level>& lvl, std::string& level_cfg, std::string& original_level_cfg);
 
 	const debug_console::ConsoleDialog* get_debug_console() const {
 #ifndef NO_EDITOR
@@ -62,8 +65,10 @@ public:
 	}
 
 	void quit_game();
+	bool is_quitting() { return quit_; }
+	void set_quitting(bool value) { quit_ = value; }
 
-	const editor* get_editor() const { return editor_; }
+	ffl::IntrusivePtr<editor> get_editor() const { return editor_; }
 
 	bool is_paused() const { return paused; }
 
@@ -76,6 +81,8 @@ public:
 	void toggle_history_trails();
 
 	void video_resize_event(const SDL_Event &event);
+
+	void on_player_set(EntityPtr e);
 
 #ifndef NO_EDITOR
 	void replay_level_from_start();
@@ -117,7 +124,7 @@ private:
 
 	void show_pause_title();
 
-	editor* editor_;
+	ffl::IntrusivePtr<editor> editor_;
 #ifndef NO_EDITOR
 	std::unique_ptr<EditorResolutionManager> editor_resolution_manager_;
 	gui::SliderPtr history_slider_;
@@ -131,7 +138,7 @@ private:
 	void onHistoryChange(float value);
 	void update_history_trails();
 
-	boost::intrusive_ptr<debug_console::ConsoleDialog> console_;
+	ffl::IntrusivePtr<debug_console::ConsoleDialog> console_;
 #endif
 };
 

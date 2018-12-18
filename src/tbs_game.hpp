@@ -24,7 +24,7 @@
 #pragma once
 
 #include <boost/scoped_ptr.hpp>
-#include <boost/intrusive_ptr.hpp>
+#include "intrusive_ptr.hpp"
 #include <deque>
 #include <set>
 
@@ -50,10 +50,10 @@ namespace tbs
 			std::string msg;
 		};
 
-		static boost::intrusive_ptr<game> create(const variant& v);
+		static ffl::IntrusivePtr<game> create(const variant& v);
 		static game* current();
 
-		explicit game();
+		explicit game(const variant& node);
 		virtual ~game();
 
 		void set_server(server_base* server) { server_ = server; }
@@ -171,7 +171,7 @@ namespace tbs
 
 		game_logic::FormulaCallable* backup_callable_;
 
-		std::vector<boost::intrusive_ptr<tbs::bot> > bots_;
+		std::vector<ffl::IntrusivePtr<tbs::bot> > bots_;
 
 		void executeCommand(variant cmd);
 
@@ -185,9 +185,14 @@ namespace tbs
 		std::vector<std::string> replay_;
 		mutable variant replay_last_;
 		variant winner_;
+		variant server_report_;
 
 		int start_timestamp_;
 
+		void finished_upload_state();
+		void finished_download_state(std::string data);
+		void download_state(const std::string& id);
+		void upload_state(const std::string& id);
 		void save_state(const std::string& fname);
 		void load_state(const std::string& fname);
 
@@ -205,6 +210,6 @@ namespace tbs
 		~game_context();
 	};
 
-	typedef boost::intrusive_ptr<game> game_ptr;
-	typedef boost::intrusive_ptr<const game> const_game_ptr;
+	typedef ffl::IntrusivePtr<game> game_ptr;
+	typedef ffl::IntrusivePtr<const game> const_game_ptr;
 }

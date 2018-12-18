@@ -44,13 +44,18 @@
 #include <time.h>
 #endif
 
+#include "cairo.hpp"
 #include "custom_object_type.hpp"
 #include "filesystem.hpp"
 #include "formatter.hpp"
 #include "formula_profiler.hpp"
+#include "formula_function.hpp"
+#include "formula_function_registry.hpp"
 #include "level_runner.hpp"
 #include "object_events.hpp"
 #include "preferences.hpp"
+#include "sound.hpp"
+#include "sys.hpp"
 #include "unit_test.hpp"
 #include "variant.hpp"
 #include "widget.hpp"
@@ -59,13 +64,17 @@
 #include "kre/Color.hpp"
 #include "kre/Font.hpp"
 #include "kre/ShadersOGL.hpp"
+#include "kre/Surface.hpp"
 
 void init_call_stack(int min_size);
+
+extern bool g_debug_visualize_audio;
 
 namespace {
 
 PREF_STRING(profile_widget_area, "[20,20,1000,200]", "Area of the profile widget");
 PREF_STRING(profile_widget_details_area, "[20,240,1000,400]", "Area of the profile widget");
+PREF_INT(profile_memory_freq, 60, "Memory profiler will refresh every x cycles");
 
 uint64_t g_begin_tsc;
 
@@ -104,6 +113,8 @@ class FrameDetailsWidget : public Widget
 	const InstrumentationNode* node_;
 	const InstrumentationNode* selected_node_;
 
+	std::vector<const InstrumentationNode*> chosen_nodes_stack_;
+
 	TexturePtr selected_node_text_;
 
 	struct NodeRegion {
@@ -115,6 +126,16 @@ class FrameDetailsWidget : public Widget
 
 	std::map<const char*, Color> id_to_color_;
 	std::map<const char*, TexturePtr> id_to_texture_;
+	std::map<const char*, uint64_t> id_to_time_;
+	std::map<const char*, int> id_to_nsamples_;
+
+	void calculateTimings(const InstrumentationNode* node) {
+		id_to_time_[node->id] += node->end_time - node->begin_time;
+		id_to_nsamples_[node->id]++;
+		for(auto record : node->records) {
+			calculateTimings(record);
+		}
+	}
 
 	int calculateColors(const InstrumentationNode* node, int index=0, int depth=1) {
 		const int x1 = calculateX(node->begin_time);
@@ -140,8 +161,11 @@ class FrameDetailsWidget : public Widget
 				color = Color(LegendColors[index%NumLegendColors]);
 				++index;
 			}
+
+			const uint64_t timing = id_to_time_[node->id];
+
 			id_to_color_[node->id] = color;
-			id_to_texture_[node->id] = Font::getInstance()->renderText(node->id ? node->id : "Frame", white_color_, 12, true, Font::get_default_monospace_font());
+			id_to_texture_[node->id] = Font::getInstance()->renderText(node->id ? std::string(formatter() << node->id << " (" << id_to_time_[node->id]/1000 << "us, " << id_to_nsamples_[node->id] << "x)") : std::string("Frame"), white_color_, 12, true, Font::get_default_monospace_font());
 		}
 
 		for(auto record : node->records) {
@@ -153,13 +177,26 @@ class FrameDetailsWidget : public Widget
 public:
 	explicit FrameDetailsWidget(const InstrumentationNode* node) : white_color_("white"), node_(node), selected_node_(nullptr) {
 
+
 		variant area = game_logic::Formula(variant(g_profile_widget_details_area)).execute();
 		std::vector<int> area_int = area.as_list_int();
 		ASSERT_LOG(area_int.size() == 4, "--profile-widget-area must have four integers");
 		setLoc(area_int[0], area_int[1]);
 		setDim(area_int[2], area_int[3]);
 
-		calculateColors(node);
+		recalculate();
+	}
+
+	void recalculate()
+	{
+		regions_.clear();
+		id_to_color_.clear();
+		id_to_texture_.clear();
+		id_to_time_.clear();
+		id_to_nsamples_.clear();
+
+		calculateTimings(node_);
+		calculateColors(node_);
 	}
 
 	int calculateX(uint64_t t) const {
@@ -189,11 +226,24 @@ public:
 		c.drawSolidRect(rect(x(), y(), width(), height()), Color("black"));
 		drawNode(node_, 1);
 
-		int n = 0;
-		for(auto p : id_to_color_) {
-			auto itor = id_to_texture_.find(p.first);
+		std::vector<std::pair<uint64_t, const char*> > ids;
+		for(auto p : id_to_time_) {
+			ids.push_back(std::pair<uint64_t,const char*>(p.second, p.first));
+		}
+
+		std::sort(ids.begin(), ids.end());
+		std::reverse(ids.begin(), ids.end());
+
+		int n = 1;
+		for(auto p : ids) {
+			if(n > 12) {
+				break;
+			}
+
+			auto itor = id_to_texture_.find(p.second);
+			auto color_itor = id_to_color_.find(p.second);
 			c.blitTexture(itor->second, 0, x() + 25, 4 + y() + n*16, white_color_);
-			c.drawSolidRect(rect(x()+10, 4 + y() + n*16, 10, 10), p.second);
+			c.drawSolidRect(rect(x()+10, 4 + y() + n*16, 10, 10), color_itor->second);
 			++n;
 		}
 
@@ -218,6 +268,21 @@ public:
 			}
 			break;
 		}
+
+		case SDL_MOUSEBUTTONDOWN: {
+			const SDL_MouseButtonEvent& e = event.button;
+			if(e.button == SDL_BUTTON_LEFT && selected_node_ && selected_node_ != node_) {
+				chosen_nodes_stack_.push_back(node_);
+				node_ = selected_node_;
+				recalculate();
+			} else if(e.button == SDL_BUTTON_RIGHT && chosen_nodes_stack_.empty() == false) {
+				node_ = chosen_nodes_stack_.back();
+				chosen_nodes_stack_.pop_back();
+				recalculate();
+			}
+
+			break;
+		}
 		}
 
 		return false;
@@ -229,7 +294,14 @@ public:
 
 	TexturePtr calculateNodeText(const InstrumentationNode* node) const {
 
-		std::string text = formatter() << (node->id ? node->id : "Frame") << ": " << (node->end_time - node->begin_time)/1000 << "us";
+		uint64_t child_time = 0LL;
+		for(auto c : node->records) {
+			child_time += (c->end_time - c->begin_time);
+		}
+
+		uint64_t self_time = (node->end_time - node->begin_time) - child_time;
+
+		std::string text = formatter() << (node->id ? node->id : "Frame") << ": " << (node->end_time - node->begin_time)/1000 << "us (self: " << self_time/1000 << "us)";
 
 		auto info = node->info.get_debug_info();
 		if(info) {
@@ -290,9 +362,9 @@ class ProfilerWidget : public Widget
 	bool paused_;
 	int selected_frame_;
 
-	boost::intrusive_ptr<FrameDetailsWidget> details_;
+	ffl::IntrusivePtr<FrameDetailsWidget> details_;
 
-	TexturePtr draw_text_, process_text_, sleep_text_;
+	TexturePtr draw_text_, process_text_, sleep_text_, gc_text_;
 
 	TexturePtr frame_text_;
 
@@ -312,6 +384,7 @@ public:
 		draw_text_ = Font::getInstance()->renderText("Draw", white_color_, 16, true, Font::get_default_monospace_font());
 		process_text_ = Font::getInstance()->renderText("Process", white_color_, 16, true, Font::get_default_monospace_font());
 		sleep_text_ = Font::getInstance()->renderText("Sleep", white_color_, 16, true, Font::get_default_monospace_font());
+		gc_text_ = Font::getInstance()->renderText("GC", white_color_, 16, true, Font::get_default_monospace_font());
 	}
 
 	~ProfilerWidget() {
@@ -352,12 +425,13 @@ public:
 
 		size_t begin_frame = firstDisplayedFrame();
 
-		BarGraphRenderable renderables[5];
+		BarGraphRenderable renderables[6];
 		renderables[0].setColor(gray_color_);
 		renderables[1].setColor(red_color_);
 		renderables[2].setColor(blue_color_);
 		renderables[3].setColor(yellow_color_);
-		renderables[4].setColor(white_color_);
+		renderables[4].setColor(green_color_);
+		renderables[5].setColor(white_color_);
 
 		for(size_t i = begin_frame; i < frames_.size()-1; ++i) {
 			const InstrumentationNode& f = *frames_[i];
@@ -380,10 +454,12 @@ public:
 					renderable = &renderables[2];
 				} else if(strcmp(node->id, "DRAW") == 0) {
 					renderable = &renderables[3];
+				} else if(strcmp(node->id, "GC") == 0) {
+					renderable = &renderables[4];
 				}
 
 				if(i == selected_frame_) {
-					renderable = &renderables[4];
+					renderable = &renderables[5];
 				}
 
 				const uint64_t begin_pos = node->begin_time - f.begin_time;
@@ -395,7 +471,7 @@ public:
 			}
 		}
 
-		for(int i = 1; i != 5; ++i) {
+		for(int i = 1; i != 6; ++i) {
 			auto& renderable = renderables[i];
 			if(renderable.empty() == false) {
 				renderable.prepareDraw();
@@ -413,6 +489,8 @@ public:
 		c.blitTexture(process_text_, 0, x() + 25, y() + 20, white_color_);
 		c.drawSolidRect(rect(x()+13, y()+38, 10, 10), blue_color_);
 		c.blitTexture(sleep_text_, 0, x() + 25, y() + 35, white_color_);
+		c.drawSolidRect(rect(x()+13, y()+53, 10, 10), green_color_);
+		c.blitTexture(gc_text_, 0, x() + 25, y() + 50, white_color_);
 
 		if(frame_text_.get() != nullptr) {
 			c.blitTexture(frame_text_, 0, x() + width() - 400, y() + 5, white_color_);
@@ -550,7 +628,434 @@ public:
 	}
 };
 
-boost::intrusive_ptr<ProfilerWidget> g_profiler_widget;
+ffl::IntrusivePtr<ProfilerWidget> g_profiler_widget;
+
+class MemoryProfilerWidget : public Widget
+{
+	Color gray_color_, yellow_color_, green_color_, blue_color_, red_color_, magenta_color_, white_color_;
+
+	bool paused_;
+	int selected_frame_;
+	int ncycles_;
+
+	TexturePtr frame_text_;
+
+	struct FrameInfo {
+		int num_surfaces, surface_usage;
+		int num_textures, texture_usage;
+		int num_objects, object_usage;
+		int num_cairo, cairo_usage;
+		int num_sound, sound_usage, max_sound;
+		int other_usage;
+		sys::MemoryConsumptionInfo mem;
+	};
+
+	std::vector<FrameInfo> frames_;
+	int highest_phys_;
+
+	struct FontEntry {
+		std::string str;
+		KRE::TexturePtr tex;
+		int touch;
+	};
+
+	mutable std::vector<FontEntry> text_cache_;
+
+	mutable int font_entry_touch_;
+
+	KRE::TexturePtr renderText(const std::string& text) const {
+		for(auto& entry : text_cache_) {
+			if(entry.str == text) {
+				entry.touch = font_entry_touch_;
+				++font_entry_touch_;
+				return entry.tex;
+			}
+		}
+
+		auto itor = text_cache_.begin();
+		if(text_cache_.size() < 20) {
+			text_cache_.push_back(FontEntry());
+			itor = text_cache_.end()-1;
+		} else {
+			for(auto i = text_cache_.begin(); i != text_cache_.end(); ++i) {
+				if(i->touch < itor->touch) {
+					itor = i;
+				}
+			}
+		}
+
+		itor->touch = font_entry_touch_++;
+		itor->str = text;
+		itor->tex = Font::getInstance()->renderText(text, white_color_, 12, false, Font::get_default_monospace_font());
+		return itor->tex;
+	}
+
+public:
+	MemoryProfilerWidget() :
+	  gray_color_("gray"), yellow_color_("yellow"), green_color_("green"), blue_color_("lightblue"), red_color_("red"), magenta_color_("magenta"), white_color_("white"), paused_(false), selected_frame_(-1), ncycles_(0), highest_phys_(0), font_entry_touch_(0) {
+
+		variant area = game_logic::Formula(variant(g_profile_widget_area)).execute();
+		std::vector<int> area_int = area.as_list_int();
+		ASSERT_LOG(area_int.size() == 4, "--profile-widget-area must have four integers");
+		setLoc(area_int[0], area_int[1]);
+		setDim(area_int[2], area_int[3]);
+
+		newFrame();
+	}
+
+	~MemoryProfilerWidget() {
+	}
+
+	int barWidth() const { return 4; }
+
+	size_t firstDisplayedFrame() const {
+
+		const int max_frames = width()/barWidth();
+		size_t begin_frame = 0;
+		if(max_frames <= frames_.size()) {
+			begin_frame = frames_.size() - max_frames;
+		}
+
+		return begin_frame;
+	}
+
+	void handleDraw() const override {
+		if(frames_.empty()) {
+			return;
+		}
+
+		Canvas& c = *Canvas::getInstance();
+
+		c.drawSolidRect(rect(x(), y(), width(), height()), Color("black"));
+
+		const int max_frames = width()/barWidth();
+
+		const int us_per_pixel = 200;
+
+		size_t begin_frame = firstDisplayedFrame();
+
+		BarGraphRenderable renderables[6];
+		renderables[0].setColor(gray_color_);
+		renderables[1].setColor(red_color_);
+		renderables[2].setColor(blue_color_);
+		renderables[3].setColor(yellow_color_);
+		renderables[4].setColor(green_color_);
+		renderables[5].setColor(magenta_color_);
+
+		for(size_t i = begin_frame; i < frames_.size()-1; ++i) {
+			const FrameInfo& f = frames_[i];
+
+			const int bar_height = (double(f.mem.phys_used_kb)/double(highest_phys_))*0.7*height();
+
+			rect area(x() + (i-begin_frame)*barWidth(), y() + height() - bar_height, barWidth(), bar_height);
+			renderables[0].addRect(area);
+
+			int baseline = 0;
+
+			{
+				const int texture_height = (double(f.texture_usage)/double(highest_phys_))*0.7*height();
+				rect area(x() + (i-begin_frame)*barWidth(), y() + height() - texture_height - baseline, barWidth(), texture_height);
+				renderables[1].addRect(area);
+				baseline += texture_height;
+			}
+
+			{
+				const int surf_height = (double(f.surface_usage)/double(highest_phys_))*0.7*height();
+				rect area(x() + (i-begin_frame)*barWidth(), y() + height() - surf_height - baseline, barWidth(), surf_height);
+				renderables[2].addRect(area);
+				baseline += surf_height;
+			}
+
+			{
+				const int surf_height = (double(f.object_usage)/double(highest_phys_))*0.7*height();
+				rect area(x() + (i-begin_frame)*barWidth(), y() + height() - surf_height - baseline, barWidth(), surf_height);
+				renderables[3].addRect(area);
+				baseline += surf_height;
+			}
+
+			{
+				const int surf_height = (double(f.cairo_usage)/double(highest_phys_))*0.7*height();
+				rect area(x() + (i-begin_frame)*barWidth(), y() + height() - surf_height - baseline, barWidth(), surf_height);
+				renderables[4].addRect(area);
+				baseline += surf_height;
+			}
+
+			{
+				const int surf_height = (double(f.sound_usage)/double(highest_phys_))*0.7*height();
+				rect area(x() + (i-begin_frame)*barWidth(), y() + height() - surf_height - baseline, barWidth(), surf_height);
+				renderables[5].addRect(area);
+				baseline += surf_height;
+			}
+
+		}
+
+		for(int i = 0; i != 6; ++i) {
+			auto& renderable = renderables[i];
+			if(renderable.empty() == false) {
+				renderable.prepareDraw();
+				auto wnd = KRE::WindowManager::getMainWindow();
+				renderable.preRender(wnd);
+				wnd->render(&renderable);
+			}
+		}
+
+		if(frame_text_.get() != nullptr) {
+			c.blitTexture(frame_text_, 0, x() + 10, y() + 5, white_color_);
+
+			const FrameInfo& f = frames_[selected_frame_ > 0 ? selected_frame_ : frames_.size()-1];
+
+			int xpos = x() + 13;
+
+			auto surf_text = renderText(formatter() << "Tex x" << f.num_textures << ": " << (f.texture_usage/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23, 10, 10), red_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20, white_color_);
+			xpos += surf_text->width() + 25;
+
+			surf_text = renderText(formatter() << "Surf x" << f.num_surfaces << ": " << (f.surface_usage/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23, 10, 10), blue_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20, white_color_);
+			xpos += surf_text->width() + 25;
+
+			surf_text = renderText(formatter() << "FFL obj x" << f.num_objects << ": " << (f.object_usage/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23, 10, 10), yellow_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20, white_color_);
+			xpos += surf_text->width() + 25;
+
+			surf_text = renderText(formatter() << "Cairo img x" << f.num_cairo << ": " << (f.cairo_usage/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23, 10, 10), green_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20, white_color_);
+			xpos += surf_text->width() + 25;
+
+			xpos = x() + 13;
+
+			surf_text = renderText(formatter() << "Sounds x" << f.num_sound << ": " << (f.sound_usage/1024) << "MB (max: " << (f.max_sound/1024) << "MB)");
+			c.drawSolidRect(rect(xpos, y()+23 + 15*1, 10, 10), magenta_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20 + 15*1, white_color_);
+			xpos += surf_text->width() + 25;
+
+			surf_text = renderText(formatter() << "Heap free: " << (f.mem.heap_free_kb/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23 + 15*1, 10, 10), gray_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20 + 15*1, white_color_);
+			xpos += surf_text->width() + 25;
+
+			surf_text = renderText(formatter() << "Other: " << (f.other_usage/1024) << "MB");
+			c.drawSolidRect(rect(xpos, y()+23 + 15*1, 10, 10), gray_color_);
+			c.blitTexture(surf_text, 0, xpos + 12, y() + 20 + 15*1, white_color_);
+			xpos += surf_text->width() + 25;
+		}
+
+	}
+
+	TexturePtr calculateFrameText() {
+
+		if(frames_.empty()) {
+			return TexturePtr();
+		} else {
+			std::string text = (formatter() << "Peak mem usage: " << (highest_phys_/1024) << "MB; Cur mem usage: " << (frames_.back().mem.phys_used_kb/1024) << "MB; heap: " << (frames_.back().mem.heap_free_kb + frames_.back().mem.heap_used_kb)/1024 << "MB");
+			return Font::getInstance()->renderText(text, white_color_, 12, false, Font::get_default_monospace_font());
+		}
+	}
+
+	bool handleEvent(const SDL_Event& event, bool claimed) override {
+		if(paused_ == false) {
+			return false;
+		}
+
+		switch(event.type) {
+		case SDL_MOUSEWHEEL:
+			break;
+		case SDL_MOUSEMOTION: {
+			const SDL_MouseMotionEvent& motion = event.motion;
+
+			if(motion.x >= x() && motion.y >= y() && motion.x < x() + width() && motion.y < y() + height()) {
+				const int bar = firstDisplayedFrame() + (motion.x - x())/barWidth();
+				if(bar >= 0 && bar < frames_.size()) {
+					selected_frame_ = bar;
+				} else {
+					selected_frame_ = -1;
+				}
+			} else {
+				selected_frame_ = -1;
+			}
+			return claimed;
+		}
+
+		case SDL_MOUSEBUTTONDOWN: {
+			const SDL_MouseButtonEvent& e = event.button;
+			if(selected_frame_ != -1 && selected_frame_ < frames_.size() &&
+			   e.x >= x() && e.y >= y() && e.x < x() + width() && e.y < y() + height()) {
+				selectFrame(selected_frame_);
+				return true;
+			}
+
+			break;
+		}
+
+		}
+		return claimed;
+	}
+
+	void selectFrame(int nframe) {
+	}
+
+	WidgetPtr clone() const override {
+		return WidgetPtr(new MemoryProfilerWidget);
+	}
+
+	void newFrame() {
+		if(LevelRunner::getCurrent() && LevelRunner::getCurrent()->is_paused()) {
+			paused_ = true;
+			return;
+		}
+
+		paused_ = false;
+
+		if(++ncycles_ >= g_profile_memory_freq) {
+			ncycles_ = 0;
+		} else {
+			return;
+		}
+
+		frames_.resize(frames_.size()+1);
+		sys::get_memory_consumption(&frames_.back().mem);
+		if(frames_.back().mem.phys_used_kb > highest_phys_) {
+			highest_phys_ = frames_.back().mem.phys_used_kb;
+			frame_text_ = calculateFrameText();
+		}
+
+		{
+		std::set<const KRE::Surface*> surfaces = KRE::Surface::getAllSurfaces();
+
+		int surface_usage = 0;
+		int nsurfaces = 0;
+		for(auto s : surfaces) {
+			if(s->hasData()) {
+				surface_usage += (s->width()*s->height()*4)/1024;
+				++nsurfaces;
+			}
+		}
+
+		frames_.back().num_surfaces = nsurfaces;
+		frames_.back().surface_usage = surface_usage;
+		}
+
+		{
+		const std::set<Texture*>& textures = KRE::Texture::getAllTextures();
+		std::set<Texture*> unique_textures;
+		for(auto i = textures.begin(); i != textures.end(); ++i) {
+			bool already_seen = false;
+			for(auto j = textures.begin(); j != i; ++j) {
+				if((*i)->id() == (*j)->id()) {
+					already_seen = true;
+					break;
+				}
+			}
+
+			if(!already_seen) {
+				unique_textures.insert(*i);
+			}
+		}
+		int usage = 0;
+		for(auto t : unique_textures) {
+			usage += (t->width()*t->height()*4)/1024;
+		}
+
+		frames_.back().num_textures = static_cast<int>(unique_textures.size());
+		frames_.back().texture_usage = usage;
+		}
+
+		{
+		std::vector<GarbageCollectible*> obj;
+		GarbageCollectible::getAll(&obj);
+		int usage = 0;
+		for(auto p : obj) {
+			usage += sys::get_heap_object_usable_size(p);
+		}
+
+		frames_.back().num_objects = static_cast<int>(obj.size());
+		frames_.back().object_usage = usage/1024;
+
+		}
+
+		{
+		graphics::CairoCacheStatus status = graphics::get_cairo_image_cache_status();
+		frames_.back().num_cairo = status.num_items;
+		frames_.back().cairo_usage = status.memory_usage/1024;
+		}
+
+		{
+		sound::MemoryUsageInfo status = sound::get_memory_usage_info();
+		frames_.back().num_sound = status.nsounds_cached;
+		frames_.back().sound_usage = status.cache_usage/1024;
+		frames_.back().max_sound = status.max_cache_usage/1024;
+		}
+
+		frames_.back().other_usage = frames_.back().mem.phys_used_kb - frames_.back().surface_usage - frames_.back().texture_usage - frames_.back().object_usage - frames_.back().sound_usage - frames_.back().mem.heap_free_kb;
+	}
+};
+
+PREF_INT(debug_visualize_audio_samples_per_pixel, 64, "Number of audio samples to represent per pixel");
+PREF_FLOAT(debug_visualize_audio_scale, 1.0, "scale audio graph by this amount");
+
+ffl::IntrusivePtr<MemoryProfilerWidget> g_memory_profiler_widget;
+
+class SoundVisualizerWidget : public Widget
+{
+	mutable std::vector<float> buf_;
+public:
+	SoundVisualizerWidget()
+	{
+		setLoc(0, 10);
+		setDim(800, 500);
+	};
+
+	void handleDraw() const override {
+		Canvas& c = *Canvas::getInstance();
+
+		c.drawSolidRect(rect(x(), y(), width(), height()), Color(0.0f, 0.0f, 0.0f, 0.3f));
+
+		sound::get_debug_audio_stream(buf_);
+
+		BarGraphRenderable renderable;
+		renderable.setColor(Color("white"));
+
+		int pos = width() - 1;
+		int index = int(buf_.size())-1;
+		while(index >= 0 && pos >= 0) {
+			const float sample = buf_[index];
+
+			int npixels_height = g_debug_visualize_audio_scale*sample*height()/2;
+			if(npixels_height > height()/2) {
+				npixels_height = height()/2;
+			}
+
+			if(npixels_height < -height()/2) {
+				npixels_height = -height()/2;
+			}
+
+			if(sample > 0.0) {
+				renderable.addRect(rect(pos, height()/2 - npixels_height, 1, npixels_height));
+			} else {
+				renderable.addRect(rect(pos, height()/2, 1, -npixels_height));
+			}
+
+			--pos;
+			index -= g_debug_visualize_audio_samples_per_pixel;
+		}
+
+		renderable.prepareDraw();
+		auto wnd = KRE::WindowManager::getMainWindow();
+		renderable.preRender(wnd);
+		wnd->render(&renderable);
+	}
+
+	WidgetPtr clone() const override {
+		return WidgetPtr(new SoundVisualizerWidget);
+	}
+private:
+};
+
+ffl::IntrusivePtr<SoundVisualizerWidget> g_sound_visualizer_widget;
 
 }
 
@@ -569,14 +1074,26 @@ namespace formula_profiler
 		std::map<const char*, InstrumentationRecord> g_instrumentation;
 	}
 
+	const char* Instrument::generate_id(const char* id, int num)
+	{
+		static std::map<std::pair<const char*,int>, std::string> m;
+
+		std::string& s = m[std::pair<const char*,int>(id, num)];
+		if(s.empty()) {
+			s = (formatter() << id << " " << num);
+		}
+
+		return s.c_str();
+	}
+
 	Instrument::Instrument() : id_(nullptr)
 	{
 	}
 
 	Instrument::Instrument(const char* id, const game_logic::Formula* formula) : id_(id)
 	{
+		t_ = SDL_GetPerformanceCounter();
 		if(profiler_on) {
-			t_ = SDL_GetPerformanceCounter();
 			if(g_profiler_widget) {
 				g_profiler_widget->beginInstrument(id, t_, formula ? formula->strVal() : variant());
 			}
@@ -595,15 +1112,28 @@ namespace formula_profiler
 
 	Instrument::~Instrument()
 	{
-		if(profiler_on) {
+		finish();
+	}
+
+	void Instrument::finish()
+	{
+		if(profiler_on && id_) {
 			uint64_t end_t = SDL_GetPerformanceCounter();
 			InstrumentationRecord& r = g_instrumentation[id_];
-			r.time_ns += tsc_to_ns(end_t - t_);
+			r.time_ns += tsc_to_ns(end_t) - tsc_to_ns(t_);
 			r.nsamples++;
 			if(g_profiler_widget) {
 				g_profiler_widget->endInstrument(id_, end_t);
 			}
+
+			id_ = nullptr;
 		}
+	}
+
+	uint64_t Instrument::get_ns() const
+	{
+		uint64_t end_t = SDL_GetPerformanceCounter();
+		return tsc_to_ns(end_t) - tsc_to_ns(t_);
 	}
 
 	void dump_instrumentation()
@@ -735,13 +1265,13 @@ namespace formula_profiler
 		return profiler_on;
 	}
 
-	void Manager::init(const char* output_file)
+	void Manager::init(const char* output_file, bool memory_profiler)
 	{
 		if(output_file && profiler_on == false) {
+			main_thread = SDL_ThreadID();
+
 			current_expression_call_stack.reserve(10000);
 			event_call_stack_samples.resize(max_samples);
-
-			main_thread = SDL_ThreadID();
 
 			LOG_INFO("SETTING UP PROFILING: " << output_file);
 			profiler_on = true;
@@ -753,23 +1283,30 @@ namespace formula_profiler
 
 			init_call_stack(65536);
 
+			if(memory_profiler) {
+				g_memory_profiler_widget.reset(new MemoryProfilerWidget);
+			} else {
+
 #if defined(_MSC_VER) || MOBILE_BUILD
-			// Crappy windows approximation.
-			sdl_profile_timer = SDL_AddTimer(10, sdl_timer_callback, 0);
-			if(sdl_profile_timer == 0) {
-				LOG_WARN("Couldn't create a profiling timer!");
-			}
+				// Crappy windows approximation.
+				// This is currently disabled pending a work-around since
+				// SDL_AddTimer() might make calls on another thread while we need
+				// profiling call to be on the main thread.
+				sdl_profile_timer = 0; // SDL_AddTimer(10, sdl_timer_callback, 0);
+				if(sdl_profile_timer == 0) {
+					LOG_WARN("Couldn't create a profiling timer!");
+				}
 #else
-			signal(SIGPROF, sigprof_handler);
+				signal(SIGPROF, sigprof_handler);
 
-			struct itimerval timer;
-			timer.it_interval.tv_sec = 0;
-			timer.it_interval.tv_usec = 10000;
-			timer.it_value = timer.it_interval;
-			setitimer(ITIMER_PROF, &timer, 0);
+				struct itimerval timer;
+				timer.it_interval.tv_sec = 0;
+				timer.it_interval.tv_usec = 10000;
+				timer.it_value = timer.it_interval;
+				setitimer(ITIMER_PROF, &timer, 0);
 #endif
-
-			g_profiler_widget.reset(new ProfilerWidget);
+				g_profiler_widget.reset(new ProfilerWidget);
+			}
 		}
 	}
 
@@ -778,6 +1315,7 @@ namespace formula_profiler
 		if(profiler_on) {
 			profiler_on = false;
 			g_profiler_widget.reset();
+			g_memory_profiler_widget.reset();
 
 #if defined(_MSC_VER) || MOBILE_BUILD
 			SDL_RemoveTimer(sdl_profile_timer);
@@ -905,21 +1443,46 @@ namespace formula_profiler
 
 		++nframes_profiled;
 
+		if(g_memory_profiler_widget) {
+			g_memory_profiler_widget->process();
+			g_memory_profiler_widget->newFrame();
+		}
+
 		if(g_profiler_widget) {
 			g_profiler_widget->process();
 			g_profiler_widget->newFrame();
+		}
+
+		if(g_debug_visualize_audio) {
+			if(!g_sound_visualizer_widget) {
+				g_sound_visualizer_widget.reset(new SoundVisualizerWidget);
+			}
+
+			g_sound_visualizer_widget->process();
 		}
 	}
 
 	void draw()
 	{
+		if(g_memory_profiler_widget) {
+			g_memory_profiler_widget->draw();
+		}
+
 		if(g_profiler_widget) {
 			g_profiler_widget->draw();
+		}
+
+		if(g_sound_visualizer_widget) {
+			g_sound_visualizer_widget->draw();
 		}
 	}
 
 	bool handle_sdl_event(const SDL_Event& event, bool claimed)
 	{
+		if(g_memory_profiler_widget) {
+			return g_memory_profiler_widget->processEvent(point(), event, claimed);
+		}
+
 		if(g_profiler_widget) {
 			return g_profiler_widget->processEvent(point(), event, claimed);
 		}
@@ -985,6 +1548,40 @@ namespace formula_profiler
 		}
 	}
 
+	using namespace game_logic;
+
+	class ProfilerInterface : public game_logic::FormulaCallable
+	{
+	public:
+	private:
+		DECLARE_CALLABLE(ProfilerInterface);
+	};
+
+	BEGIN_DEFINE_CALLABLE_NOBASE(ProfilerInterface)
+	DEFINE_FIELD(surfaces, "[int]")
+		std::set<const KRE::Surface*> surfaces = KRE::Surface::getAllSurfaces();
+		std::vector<variant> result;
+
+		for(auto s : surfaces) {
+			if(s->hasData()) {
+				std::map<variant,variant> m;
+				m[variant("name")] = variant(s->getName());
+				m[variant("width")] = variant(s->width());
+				m[variant("height")] = variant(s->height());
+				m[variant("kb_usage")] = variant((s->width()*s->height()*4)/1024);
+				result.push_back(variant(&m));
+			}
+		}
+
+		return variant(&result);
+	END_DEFINE_CALLABLE(ProfilerInterface)
+
+	const std::string FunctionModule = "core";
+
+	FUNCTION_DEF(anura_profiler, 0, 0, "anura_profiler(): get the interface to the profiler")
+		return variant(new ProfilerInterface);
+	RETURN_TYPE("builtin profiler_interface")
+	END_FUNCTION_DEF(anura_profiler)
 }
 
 #endif

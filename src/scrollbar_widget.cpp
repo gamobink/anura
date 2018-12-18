@@ -228,6 +228,7 @@ namespace gui
 		} else
 		if(event.type == SDL_MOUSEBUTTONDOWN) {
 			const SDL_MouseButtonEvent& e = event.button;
+
 			if(!inWidget(e.x, e.y)) {
 				return claimed;
 			}

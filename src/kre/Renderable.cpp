@@ -173,10 +173,14 @@ namespace KRE
 		if(node.has_key("texture")) {
 			if(node["texture"].is_string() && (node["texture"].as_string() != "fbo" && node["texture"].as_string() != "svg")) {
 				texture_ = Texture::createTexture(node["texture"]);
+			} else if(node["texture"].is_map()) {
+				texture_ = Texture::createTexture(node["texture"]);
 			}
 		} else if(node.has_key("image")) {
 			if(node["image"].is_string() && (node["image"].as_string() != "fbo" && node["image"].as_string() != "svg")) {
 				texture_ = Texture::createTexture(node["image"]);
+			} else if(node["image"].is_map()) {
+				texture_ = Texture::createTexture(node["texture"]);
 			}
 		}
 		if(node.has_key("depth_check")) {
@@ -188,6 +192,21 @@ namespace KRE
 		// XXX add depth function.
 		if(node.has_key("use_lighting")) {
 			enableLighting(node["use_lighting"].as_bool());
+		}
+	}
+
+	void Renderable::writeData(variant_builder* build) const
+	{
+		if(ignore_global_model_) {
+			build->add("ignore_global_model", true);
+		}
+
+		build->add("order", order_);
+
+		if(isBlendEnabled()) {
+			build->add("blend_enable", true);
+			build->add("blend", getBlendMode().write());
+			build->add("blend_equation", getBlendEquation().write());
 		}
 	}
 

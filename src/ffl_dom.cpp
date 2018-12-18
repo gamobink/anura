@@ -281,7 +281,7 @@ namespace xhtml
 	
 	void DocumentObject::process()
 	{
-		auto st = doc_->process(style_tree_, layout_size_.w(), layout_size_.h());
+		auto st = doc_->process(style_tree_, layout_size_.x(), layout_size_.y(), layout_size_.w(), layout_size_.h());
 		if(st != nullptr) {
 			scene_tree_ = st;
 		}
@@ -536,7 +536,7 @@ namespace xhtml
 		END_DEFINE_FN
 
 		BEGIN_DEFINE_FN(rebuildTree, "() ->commands")
-			return variant(new game_logic::FnCommandCallable([=]() {
+			return variant(new game_logic::FnCommandCallable("dom::rebuildTree", [=]() {
 				obj.doc_->rebuildTree();
 			}));
 		END_DEFINE_FN
@@ -750,8 +750,8 @@ namespace xhtml
 			const std::string attr_name = FN_ARG(0).as_string();
 			const std::string attr_value = FN_ARG(1).as_string();
 
-			boost::intrusive_ptr<const ElementObject> ptr(&obj);
-			return variant(new game_logic::FnCommandCallable([ptr, attr_name, attr_value]() {
+			ffl::IntrusivePtr<const ElementObject> ptr(&obj);
+			return variant(new game_logic::FnCommandCallable("dom::setAttribute", [ptr, attr_name, attr_value]() {
 				ptr->element_->setAttribute(attr_name, attr_value);
 			}));
 		END_DEFINE_FN

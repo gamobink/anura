@@ -519,10 +519,13 @@ void CodeEditorDialog::process()
 				LOG_INFO("INIT TILE MAP OK");
 			} else if(strstr(fname_.c_str(), "data/shaders.cfg")) {
 				LOG_INFO("CODE_EDIT_DIALOG FILE: " << fname_);
-				ASSERT_LOG(false, "XXX edited shaders file fixme");
-				//for(Level* lvl : get_all_levels_set()) {
-				//	lvl->shadersUpdated();
-				//}
+				//ASSERT_LOG(false, "XXX edited shaders file fixme");
+
+				variant node = json::parse(editor_->text());
+				KRE::ShaderProgram::loadFromVariant(node);
+				for(Level* lvl : get_all_levels_set()) {
+					lvl->shadersUpdated();
+				}
 			} else if(strstr(fname_.c_str(), "classes/") &&
 			          std::equal(fname_.end()-4,fname_.end(),".cfg")) {
 
@@ -667,7 +670,7 @@ void CodeEditorDialog::process()
 				if(selected && selected->type == formula_tokenizer::FFL_TOKEN_TYPE::IDENTIFIER) {
 					const std::string identifier(selected->begin, selected->end);
 
-					static const boost::intrusive_ptr<CustomObjectCallable> obj_definition(new CustomObjectCallable);
+					static const ffl::IntrusivePtr<CustomObjectCallable> obj_definition(new CustomObjectCallable);
 					for(int n = 0; n != obj_definition->getNumSlots(); ++n) {
 						const std::string id = obj_definition->getEntry(n)->id;
 						if(id.size() > identifier.size() && std::equal(identifier.begin(), identifier.end(), id.begin())) {
@@ -1060,7 +1063,7 @@ void edit_and_continue_class(const std::string& class_name, const std::string& e
 {
 	auto wnd_w = KRE::WindowManager::getMainWindow()->width();
 	auto wnd_h = KRE::WindowManager::getMainWindow()->height();
-	boost::intrusive_ptr<CodeEditorDialog> d(new CodeEditorDialog(rect(0,0,wnd_w,wnd_h)));
+	ffl::IntrusivePtr<CodeEditorDialog> d(new CodeEditorDialog(rect(0,0,wnd_w,wnd_h)));
 
 	const std::string::const_iterator end_itor = std::find(class_name.begin(), class_name.end(), '.');
 	const std::string filename = "data/classes/" + std::string(class_name.begin(), end_itor) + ".cfg";
@@ -1083,7 +1086,7 @@ void edit_and_continue_fn(const std::string& filename, const std::string& error,
 {
 	auto wnd_w = KRE::WindowManager::getMainWindow()->width();
 	auto wnd_h = KRE::WindowManager::getMainWindow()->height();
-	boost::intrusive_ptr<CodeEditorDialog> d(new CodeEditorDialog(rect(0,0,wnd_w,wnd_h)));
+	ffl::IntrusivePtr<CodeEditorDialog> d(new CodeEditorDialog(rect(0,0,wnd_w,wnd_h)));
 
 	d->setProcessHook(std::bind(&CodeEditorDialog::process, d.get()));
 	d->add_optional_error_text_area(error);
@@ -1152,7 +1155,7 @@ void edit_and_continue_assert(const std::string& msg, std::function<void()> fn)
 
 	using debug_console::ConsoleDialog;
 
-	boost::intrusive_ptr<ConsoleDialog> console(new ConsoleDialog(Level::current(), *const_cast<game_logic::FormulaCallable*>(stack.back().callable)));
+	ffl::IntrusivePtr<ConsoleDialog> console(new ConsoleDialog(Level::current(), *const_cast<game_logic::FormulaCallable*>(stack.back().callable)));
 
 	GridPtr call_grid(new Grid(1));
 	call_grid->setMaxHeight(wnd->height() - console->y());
@@ -1170,7 +1173,7 @@ void edit_and_continue_assert(const std::string& msg, std::function<void()> fn)
 	call_grid->setLoc(console->x() + console->width() + 6, console->y());
 	call_grid->setDim(wnd->width() - call_grid->x(), wnd->height() - call_grid->y());
 
-	boost::intrusive_ptr<CodeEditorDialog> d(new CodeEditorDialog(rect(wnd->width()/2,0,wnd->width()/2,console->y())));
+	ffl::IntrusivePtr<CodeEditorDialog> d(new CodeEditorDialog(rect(wnd->width()/2,0,wnd->width()/2,console->y())));
 
 	d->set_close_buttons();
 	d->show();

@@ -173,7 +173,7 @@ namespace preferences
 		class SettingsObject : public game_logic::FormulaCallable
 		{
 		private:
-			variant getValue(const std::string& key) const {
+			variant getValue(const std::string& key) const override {
 				if(key == "dir") {
 					std::vector<variant> result;
 					for(std::map<std::string, RegisteredSetting>::iterator itor = g_registered_settings().begin(); itor != g_registered_settings().end(); ++itor) {
@@ -201,7 +201,7 @@ namespace preferences
 				}
 			}
 
-			void setValue(const std::string& key, const variant& value) {
+			void setValue(const std::string& key, const variant& value) override {
 				std::map<std::string, RegisteredSetting>::iterator itor = g_registered_settings().find(key);
 				if(itor == g_registered_settings().end()) {
 					return;
@@ -216,7 +216,7 @@ namespace preferences
 				}
 			}
 
-			void getInputs(std::vector<game_logic::FormulaInput>* inputs) const {
+			void getInputs(std::vector<game_logic::FormulaInput>* inputs) const override {
 				for(std::map<std::string, RegisteredSetting>::iterator itor = g_registered_settings().begin(); itor != g_registered_settings().end(); ++itor) {
 					inputs->push_back(game_logic::FormulaInput(itor->first, game_logic::FORMULA_ACCESS_TYPE::READ_WRITE));
 				}
@@ -226,7 +226,7 @@ namespace preferences
 
 	game_logic::FormulaCallable* get_settings_obj()
 	{
-		static boost::intrusive_ptr<game_logic::FormulaCallable> obj(new SettingsObject);
+		static ffl::IntrusivePtr<game_logic::FormulaCallable> obj(new SettingsObject);
 		return obj.get();
 	}
 
@@ -380,7 +380,6 @@ namespace preferences
 		int alt_frame_time_millis_ = -1;
 		bool no_iphone_controls_ = false;
 		bool allow_autopause_ = false;
-		bool auto_size_window_ = false;
 		bool screen_dimensions_are_persistent = false;
 		
 		bool relay_through_server_ = false;
@@ -524,8 +523,12 @@ namespace preferences
 
 		int requested_window_width_ = 0;
 		int requested_window_height_ = 0;
-		int requested_virtual_window_width_ = 0;
-		int requested_virtual_window_height_ = 0;
+
+		PREF_BOOL(auto_size_window, true, "If true, window is auto-sized");
+		PREF_INT(virtual_window_width, 0, "Virtual width of the game window");
+		PREF_INT(virtual_window_height, 0, "Virtual height of the game window");
+
+		PREF_INT(virtual_window_width_max, 0, "If set, the virtual width of the game window can be adjusted up to this amount, to match the aspect ratio of the physical device");
 	
 	}
 	
@@ -709,7 +712,7 @@ namespace preferences
 
 	bool auto_size_window()
 	{
-		return auto_size_window_;
+		return g_auto_size_window;
 	}
 
 	int requested_window_width()
@@ -724,12 +727,23 @@ namespace preferences
 
 	int requested_virtual_window_width()
 	{
-		return requested_virtual_window_width_;
+		return g_virtual_window_width;
 	}
 
 	int requested_virtual_window_height()
 	{
-		return requested_virtual_window_height_;
+		return g_virtual_window_height;
+	}
+
+	void adjust_virtual_width_to_match_physical(int width, int height)
+	{
+		static int min_window_width = g_virtual_window_width;
+		if(g_virtual_window_width_max > min_window_width) {
+			const int ideal_width = (g_virtual_window_height * width) / height;
+			if(ideal_width >= min_window_width) {
+				g_virtual_window_width = std::min<int>(ideal_width, g_virtual_window_width_max);
+			}
+		}
 	}
 
 	bool edit_on_start()
@@ -879,9 +893,10 @@ namespace preferences
 		}
 
 		for(std::map<std::string, RegisteredSetting>::iterator i = g_registered_settings().begin(); i != g_registered_settings().end(); ++i) {
-			if(i->second.persistent && node.has_key(i->first)) {
+			if(node.has_key(i->first)) {
 				i->second.read(node[i->first]);
 				i->second.has_been_set_from_persistent = true;
+				i->second.persistent = true;
 			}
 		}
 		
@@ -1027,12 +1042,12 @@ namespace preferences
 				requested_window_width_ = widths[0];
 			}
 			if(widths.size() > 1) {
-				requested_virtual_window_width_ = widths[1];
-				//if(requested_virtual_window_width_ > requested_window_width_) {
+				g_virtual_window_width = widths[1];
+				//if(g_virtual_window_width > requested_window_width_) {
 				//	xypos_draw_mask = 0;
 				//}
-			} else {
-				requested_virtual_window_width_ = requested_window_width_;
+			} else if(!g_virtual_window_width) {
+				g_virtual_window_width = requested_window_width_;
 			}
         } else if(s == "--height") {
 			auto heights = util::split_into_vector_int(arg_value, ':');
@@ -1040,9 +1055,9 @@ namespace preferences
 				requested_window_height_ = heights[0];
 			}
 			if(heights.size() > 1) {
-				requested_virtual_window_height_ = heights[1];
-			} else {
-				requested_virtual_window_height_ = requested_window_height_;
+				g_virtual_window_height = heights[1];
+			} else if(!g_virtual_window_height) {
+				g_virtual_window_height = requested_window_height_;
 			}
 		} else if(s == "--no-resizable") {
 			resizable_ = false;
@@ -1111,8 +1126,6 @@ namespace preferences
 			allow_autopause_ = false;
 		} else if(s == "--autopause") {
 			allow_autopause_ = true;
-		} else if(s == "--auto-size-window") {
-			auto_size_window_ = true;
 		} else if(s == "--difficulty" && !arg_value.empty()) {
 			if(boost::regex_match(arg_value, boost::regex("-?[0-9]+"))) {
 				force_difficulty_ = boost::lexical_cast<int>(arg_value);
@@ -1158,13 +1171,17 @@ namespace preferences
 							*setting.bool_value = true;
 						}
 					} else if(setting.variant_value) {
-						std::string value(equal+1, arg.end());
-						if(value == "yes" || value == "true") {
-							*setting.variant_value = variant::from_bool(true);
-						} else if(value == "no" || value == "false") {
-							*setting.variant_value = variant::from_bool(false);
+						if(equal != arg.end()) {
+							std::string value(equal+1, arg.end());
+							if(value == "yes" || value == "true") {
+								*setting.variant_value = variant::from_bool(true);
+							} else if(value == "no" || value == "false") {
+								*setting.variant_value = variant::from_bool(false);
+							} else {
+								*setting.variant_value = variant(value);
+							}
 						} else {
-							*setting.variant_value = variant(value);
+							*setting.variant_value = variant::from_bool(true);
 						}
 					} else {
 						ASSERT_LOG(false, "Error making sense of preference type " << base_name);
@@ -1309,7 +1326,7 @@ namespace preferences
 			const std::string key = FN_ARG(0).as_string();
 			auto it = g_registered_settings().find(key);
 			ASSERT_LOG(it != g_registered_settings().end(), "Unknown preference setting: " << key);
-			ASSERT_LOG(it->second.bool_value, "Preference is not a decimal: " << key);
+			ASSERT_LOG(it->second.bool_value, "Preference is not a bool: " << key);
 			return variant::from_bool(*it->second.bool_value);
 		END_DEFINE_FN
 
@@ -1317,7 +1334,7 @@ namespace preferences
 			const std::string key = FN_ARG(0).as_string();
 			auto it = g_registered_settings().find(key);
 			ASSERT_LOG(it != g_registered_settings().end(), "Unknown preference setting: " << key);
-			ASSERT_LOG(it->second.int_value, "Preference is not a decimal: " << key);
+			ASSERT_LOG(it->second.int_value, "Preference is not an int: " << key);
 			return variant(*it->second.int_value);
 		END_DEFINE_FN
 
@@ -1329,13 +1346,28 @@ namespace preferences
 			return variant(*it->second.double_value);
 		END_DEFINE_FN
 
-		BEGIN_DEFINE_FN(set_preference_value, "(string, any)->commands")
+		BEGIN_DEFINE_FN(set_preference_value, "(string, any, null|[enum {persistent}]=null)->commands")
 			const std::string key = FN_ARG(0).as_string();
 			variant val = FN_ARG(1);
 			auto it = g_registered_settings().find(key);
 			ASSERT_LOG(it != g_registered_settings().end(), "Unknown preference setting: " << key);
 
-			return variant(new game_logic::FnCommandCallable([=]() {
+			bool force_persistent = false;
+
+			if(NUM_FN_ARGS > 2 && FN_ARG(2).is_list()) {
+				variant flags = FN_ARG(2);
+				for(variant flag : flags.as_list()) {
+					if(flag.as_enum() == "persistent") {
+						force_persistent = true;
+					}
+				}
+			}
+
+			return variant(new game_logic::FnCommandCallable("set_preference_value", [=]() {
+				if(force_persistent) {
+					it->second.persistent = true;
+				}
+
 				if(it->second.int_value) {
 					*it->second.int_value = val.as_int();
 				} else if(it->second.bool_value) {
@@ -1352,7 +1384,7 @@ namespace preferences
 		END_DEFINE_FN
 
 		BEGIN_DEFINE_FN(save_preferences, "()->commands")
-			return variant(new game_logic::FnCommandCallable([=]() {
+			return variant(new game_logic::FnCommandCallable("save_preferences", [=]() {
 				save_preferences();
 			}));
 		END_DEFINE_FN

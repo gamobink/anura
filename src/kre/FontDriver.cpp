@@ -214,7 +214,7 @@ namespace KRE
 		attribs_->addAttributeDesc(AttributeDesc(AttrType::TEXTURE,  2, AttrFormat::FLOAT, false, sizeof(font_coord), offsetof(font_coord, tc)));
 		as->addAttribute(AttributeBasePtr(attribs_));
 		as->setDrawMode(DrawMode::TRIANGLES);
-		as->clearblendState();
+		as->clearBlendState();
 		as->clearBlendMode();
 
 		addAttributeSet(as);
@@ -274,7 +274,7 @@ namespace KRE
 		as->addAttribute(color_attrib_);
 
 		as->setDrawMode(DrawMode::TRIANGLES);
-		as->clearblendState();
+		as->clearBlendState();
 		as->clearBlendMode();
 
 		addAttributeSet(as);
@@ -371,6 +371,16 @@ namespace KRE
 		return impl_->getDescender();
 	}
 
+	int FontHandle::getBoundingHeight()
+	{
+		return impl_->getBoundingHeight();
+	}
+
+	int FontHandle::getBaseline()
+	{
+		return impl_->getBaseline();
+	}
+
 	const std::vector<point>& FontHandle::getGlyphPath(const std::string& text)
 	{
 		return impl_->getGlyphPath(text);
@@ -378,7 +388,9 @@ namespace KRE
 
 	rect FontHandle::getBoundingBox(const std::string& text)
 	{
-		return rect();
+		long w, h;
+		impl_->getBoundingBox(text, &w, &h);
+		return rect(0, 0, w, h);
 	}
 
 	FontRenderablePtr FontHandle::createRenderableFromPath(FontRenderablePtr r, const std::string& text, const std::vector<point>& path)

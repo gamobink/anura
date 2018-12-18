@@ -21,7 +21,7 @@
 	   distribution.
 */
 
-#include <boost/intrusive_ptr.hpp>
+#include "intrusive_ptr.hpp"
 
 #include "formula.hpp"
 #include "formula_callable.hpp"
@@ -32,7 +32,7 @@ namespace
 	using namespace game_logic;
 
 	class MockChar : public FormulaCallable {
-		variant getValue(const std::string& key) const {
+		variant getValue(const std::string& key) const override {
 			if(key == "strength") {
 				return variant(15);
 			} else if(key == "agility") {
@@ -46,11 +46,11 @@ namespace
 	public:
 		MockParty() : c_(new MockChar) {
 			for(int i = 0; i != 3; ++i) {
-				i_.push_back(boost::intrusive_ptr<MapFormulaCallable>(new MapFormulaCallable));
+				i_.push_back(ffl::IntrusivePtr<MapFormulaCallable>(new MapFormulaCallable));
 			}
 		}
 	private:
-		variant getValue(const std::string& key) const {
+		variant getValue(const std::string& key) const override {
 			if(key == "members") {
 				i_[0]->add("strength",variant(12));
 				i_[1]->add("strength",variant(16));
@@ -68,16 +68,16 @@ namespace
 			}
 		}
 
-		boost::intrusive_ptr<MockChar> c_;
-		std::vector<boost::intrusive_ptr<MapFormulaCallable> > i_;
+		ffl::IntrusivePtr<MockChar> c_;
+		std::vector<ffl::IntrusivePtr<MapFormulaCallable> > i_;
 
 	};
 }
 
 UNIT_TEST(formula)
 {
-	boost::intrusive_ptr<MockChar> cp(new MockChar);
-	boost::intrusive_ptr<MockParty> pp(new MockParty);
+	ffl::IntrusivePtr<MockChar> cp(new MockChar);
+	ffl::IntrusivePtr<MockParty> pp(new MockParty);
 #define FML(a) Formula(variant(a))
 	MockChar& c = *cp;
 	MockParty& p = *pp;

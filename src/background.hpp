@@ -51,13 +51,17 @@ public:
 	Background(variant node, int palette);
 	const std::string& id() const { return id_; }
 	variant write() const;
-	void draw(int x, int y, const rect& area, const std::vector<rect>& opaque_areas, float rotation, int cycle) const;
+	void draw(int x, int y, const rect& area, const std::vector<rect>& opaque_areas, float rotation, float xdelta, float ydelta, int cycle) const;
 	void drawForeground(int x, int y, float rotation, int cycle) const;
 
 	void setOffset(const point& offset);
-private:
 
-	void drawLayers(int x, int y, const rect& area, const std::vector<rect>& opaque_areas, float rotation, int cycle) const;
+	//this will make sure the palette this background uses is applied to underlying textures.
+	void refreshPalette();
+
+private:
+	
+	void drawLayers(int x, int y, const rect& area, const std::vector<rect>& opaque_areas, float rotation, float xdelta, float ydelta, int cycle) const;
 	std::string id_, file_;
 	KRE::Color top_, bot_;
 	int width_, height_;
@@ -99,7 +103,7 @@ private:
 		mutable RectRenderable below_rect;
 	};
 
-	void drawLayer(int x, int y, const rect& area, float rotation, const Layer& bg, int cycle) const;
+	void drawLayer(int x, int y, const rect& area, float rotation, float xdelta, float ydelta, const Layer& bg, int cycle) const;
 
 	std::vector<std::shared_ptr<Layer>> layers_;
 	int palette_;

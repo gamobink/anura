@@ -64,6 +64,7 @@
 #include "filesystem.hpp"
 #include "formatter.hpp"
 #include "formula.hpp"
+#include "formula_callable_definition.hpp"
 #include "frame.hpp"
 #include "grid_widget.hpp"
 #include "image_widget.hpp"
@@ -102,11 +103,46 @@ using std::placeholders::_2;
 #endif
 // XXX: fix this in the code?
 
+extern std::string g_editor_object;
+
 namespace 
 {
+	
+	class BuiltinEditor : public editor
+	{
+	public:
+		BuiltinEditor(const char* level_cfg) : editor(level_cfg)
+		{}
+
+		virtual void process() override;
+		virtual bool handleEvent(const SDL_Event& event, bool swallowed) override;
+
+		virtual void draw_gui() const override;
+
+	private:
+	};
+	
+	class CustomEditor : public editor
+	{
+	public:
+		CustomEditor(const char* level_cfg) : editor(level_cfg)
+		{}
+
+		virtual void process() override {}
+
+		virtual bool handleEvent(const SDL_Event& event, bool swallowed) override {
+			return false;
+		}
+
+		virtual void draw_gui() const override {
+		}
+
+	private:
+	};
+
 	//keep a map of editors so that when we edit a level and then later
 	//come back to it we'll save all the state we had previously
-	std::map<std::string, editor*> all_editors;
+	std::map<std::string, EditorPtr> all_editors;
 
 	//the last level we edited
 	std::string& g_last_edited_level() 
@@ -206,10 +242,9 @@ private:
 			"Restart Level (including player)", "ctrl+alt+r", std::bind(&editor::reset_playing_level, &editor_, false),
 			"Pause Game", "ctrl+p", std::bind(&editor::toggle_pause, &editor_),
 			"Code", "", std::bind(&editor::toggle_code, &editor_),
-#if defined(USE_SHADERS)
 			"Shaders", "", std::bind(&editor::edit_shaders, &editor_),
-#endif
 			"Level Code", "", std::bind(&editor::edit_level_code, &editor_),
+			"Add Subcomponent", "", std::bind(&editor::add_new_sub_component, &editor_),
 		};
 
 		menu_item duplicate_item = { "Duplicate Object(s)", "ctrl+1", std::bind(&editor::duplicate_selected_objects, &editor_) };
@@ -272,7 +307,7 @@ private:
 	void show_window_menu() 
 	{
 		std::vector<menu_item> res;
-		for(std::map<std::string, editor*>::const_iterator i = all_editors.begin(); i != all_editors.end(); ++i) {
+		for(std::map<std::string, EditorPtr>::const_iterator i = all_editors.begin(); i != all_editors.end(); ++i) {
 			std::string name = i->first;
 			if(name == g_last_edited_level()) {
 				name += " *";
@@ -289,7 +324,7 @@ private:
 	std::string code_button_text_;
 public:
 	explicit editor_menu_dialog(editor& e)
-	  : gui::Dialog(0, 0, e.xres() ? e.xres() : 1200, 40 /*FIXME: SHOULD BE EDITOR_MENUBAR_HEIGHT INSTEAD OF HARD-CODED VALUE. FIX THIS WHEN WE GET EDITOR_MENUBAR_HEIGHT WORKING PROPERLY EVERYWHERE*/), 
+	  : gui::Dialog(0, 0, e.xres() ? e.xres() : 1200, EDITOR_MENUBAR_HEIGHT),
 	  editor_(e)
 	{
 		setClearBgAmount(255);
@@ -402,7 +437,7 @@ public:
 			empty_lvl.add_attr(variant("id"), variant(module::get_id(id)));
 			std::string nn = module::get_id(name);
 			std::string modname = module::get_module_id(name);
-			sys::write_file(module::get_module_path(modname, (preferences::editor_save_to_user_preferences() ? module::BASE_PATH_USER : module::BASE_PATH_GAME)) + nn, empty_lvl.write_json());
+			sys::write_file(module::get_module_path(modname, (preferences::editor_save_to_user_preferences() ? module::BASE_PATH_USER : module::BASE_PATH_GAME)) + "data/level/" + nn, empty_lvl.write_json());
 			load_level_paths();
 			editor_.close();
 			g_last_edited_level() = id;
@@ -488,7 +523,7 @@ class editor_mode_dialog : public gui::Dialog
 		}
 	}
 
-	bool handleEvent(const SDL_Event& event, bool claimed)
+	bool handleEvent(const SDL_Event& event, bool claimed) override
 	{
 		if(!claimed) {
 			const bool ctrl_pressed = (SDL_GetModState()&(KMOD_LCTRL|KMOD_RCTRL)) != 0;
@@ -637,6 +672,13 @@ namespace
 		 resizing_right_level_edge = false,
 		 resizing_top_level_edge = false,
 		 resizing_bottom_level_edge = false;
+	
+	bool resizing_sub_component_bottom_edge = false,
+	     resizing_sub_component_right_edge = false;
+	bool dragging_sub_component = false;
+	int resizing_sub_component_index = -1;
+
+	int dragging_sub_component_usage_index = -1;
 
 	rect modify_selected_rect(const editor& e, rect boundaries, int xpos, int ypos) 
 	{
@@ -682,6 +724,12 @@ namespace
 		return boundaries;
 	}
 
+
+	rect findSubComponentArea(const Level::SubComponent& sub, int xpos, int ypos, int zoom)
+	{
+		return rect((sub.source_area.x() + (sub.source_area.w()+TileSize*4)*sub.num_variations + 20 - xpos)/zoom, (sub.source_area.y() + 20 - ypos)/zoom, 16, 16);
+	}
+
 	//find if an edge of a rectangle is selected
 	bool rect_left_edge_selected(const rect& r, int x, int y, int zoom) 
 	{
@@ -713,6 +761,22 @@ namespace
 			   x <= r.x2() + RectEdgeSelectThreshold*zoom &&
 			   y >= r.y2() - RectEdgeSelectThreshold*zoom &&
 			   y <= r.y2() + RectEdgeSelectThreshold*zoom;
+	}
+
+	bool rect_any_edge_selected(const rect& r, int x, int y, int zoom)
+	{
+		return rect_left_edge_selected(r, x, y, zoom) ||
+		       rect_right_edge_selected(r, x, y, zoom) ||
+		       rect_top_edge_selected(r, x, y, zoom) ||
+		       rect_bottom_edge_selected(r, x, y, zoom);
+	}
+
+	bool is_rect_selected(const rect& r, int x, int y, int zoom)
+	{
+		return x >= r.x() &&
+			   x <= r.x2() &&
+			   y >= r.y() &&
+			   y <= r.y2();
 	}
 
 	std::vector<editor::tileset> tilesets;
@@ -750,7 +814,7 @@ const EntityPtr& editor::enemy_type::preview_object() const
 	return preview_object_;
 }
 
-const boost::intrusive_ptr<const Frame>& editor::enemy_type::preview_frame() const
+const ffl::IntrusivePtr<const Frame>& editor::enemy_type::preview_frame() const
 {
 	if(!preview_frame_) {
 		if(frame_info_.is_map() && !preview_object_) {
@@ -792,11 +856,15 @@ std::shared_ptr<TileMap> editor::tileset::preview() const
 }
 
 
-editor* editor::get_editor(const char* level_cfg)
+EditorPtr editor::get_editor(const char* level_cfg)
 {
-	editor*& e = all_editors[level_cfg];
+	EditorPtr& e = all_editors[level_cfg];
 	if(!e) {
-		e = new editor(level_cfg);
+		if(g_editor_object.empty()) {
+			e.reset(new BuiltinEditor(level_cfg));
+		} else {
+			e.reset(new CustomEditor(level_cfg));
+		}
 	}
 	e->done_ = false;
 	return e;
@@ -817,6 +885,8 @@ namespace
 {
 	int g_codebar_width = 0;
 }
+
+PREF_BOOL(editor_history, false, "Allow editor history feature");
 
 int editor::sidebar_width()
 {
@@ -853,15 +923,20 @@ editor::editor(const char* level_cfg)
 	prev_mousey_(-1),
 	xres_(0), 
 	yres_(0), 
+	middle_mouse_deltax_(0),
+	middle_mouse_deltay_(0),
 	mouselook_mode_(false)
 {
 	LOG_INFO("BEGIN EDITOR::EDITOR");
 	const int begin = profile::get_tick_time();
-	preferences::set_record_history(true);
+
+	if(g_editor_history) {
+		preferences::set_record_history(true);
+	}
 
 	static bool first_time = true;
 	if(first_time) {
-		variant editor_cfg = json::parse_from_file("data/editor.cfg");
+		variant editor_cfg = json::parse_from_file_or_die("data/editor.cfg");
 		const int begin = profile::get_tick_time();
 		TileMap::loadAll();
 		const int mid = profile::get_tick_time();
@@ -900,7 +975,9 @@ editor::editor(const char* level_cfg)
 
 editor::~editor()
 {
-	preferences::set_record_history(false);
+	if(g_editor_history) {
+		preferences::set_record_history(false);
+	}
 }
 
 void editor::group_selection()
@@ -943,6 +1020,8 @@ void editor::toggle_facing()
 		}
 	}
 	end_command_group();
+
+	on_modify_level();
 }
 
 void editor::toggle_isUpsideDown()
@@ -963,6 +1042,8 @@ void editor::toggle_isUpsideDown()
 		}
 	}
 	end_command_group();
+
+	on_modify_level();
 }
 
 //First, note the current angle of the mouse from the object. Then, when the rotation changes, calculate the difference.
@@ -974,7 +1055,7 @@ void editor::set_rotate_reference()
 	int mousex, mousey;
     input::sdl_get_mouse_state(&mousex, &mousey);
 	mousex = xpos_ + mousex*zoom_;
-	mousey = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	mousey = ypos_ + mousey*zoom_;
 	
 	if(character_dialog_) {
 		character_dialog_->init();
@@ -996,7 +1077,7 @@ void editor::change_rotation()
 	int mousex, mousey;
     input::sdl_get_mouse_state(&mousex, &mousey);
 	mousex = xpos_ + mousex*zoom_;
-	mousey = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	mousey = ypos_ + mousey*zoom_;
 	
 	if(character_dialog_) {
 		character_dialog_->init();
@@ -1029,6 +1110,8 @@ void editor::change_rotation()
 			}
 		}
 	}
+
+	on_modify_level();
 }
 
 //Note the difference between the object's scale and the mouse distance from the object's point of origin. Use this to recompute the object's scale as the mouse position changes.
@@ -1038,7 +1121,7 @@ void editor::set_scale_reference()
 	int mousex, mousey;
     input::sdl_get_mouse_state(&mousex, &mousey);
 	mousex = xpos_ + mousex*zoom_;
-	mousey = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	mousey = ypos_ + mousey*zoom_;
 	
 	if(character_dialog_) {
 		character_dialog_->init();
@@ -1058,7 +1141,7 @@ void editor::change_scale()
 	int mousex, mousey;
 	input::sdl_get_mouse_state(&mousex, &mousey);
 	mousex = xpos_ + mousex*zoom_;
-	mousey = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	mousey = ypos_ + mousey*zoom_;
 	
 	if(character_dialog_) {
 		character_dialog_->init();
@@ -1098,6 +1181,8 @@ void editor::change_scale()
 			}
 		}
 	}
+
+	on_modify_level();
 }
 
 void editor::duplicate_selected_objects()
@@ -1120,6 +1205,8 @@ void editor::duplicate_selected_objects()
 	executeCommand(
 		std::bind(execute_functions, redo),
 		std::bind(execute_functions, undo));
+
+	on_modify_level();
 }
 
 void editor::process_ghost_objects()
@@ -1199,8 +1286,8 @@ EditorResolutionManager::EditorResolutionManager(int xres, int yres)
 
 	if(++editor_resolution_manager_count == 1) {
 		LOG_INFO("EDITOR RESOLUTION: " << editor_x_resolution << "," << editor_y_resolution);
-		KRE::WindowManager::getMainWindow()->setWindowSize(editor_x_resolution, editor_y_resolution, KRE::WindowSizeChangeFlags::NOTIFY_CANVAS_ONLY);
-		graphics::GameScreen::get().setLocation(0, EDITOR_MENUBAR_HEIGHT);
+		KRE::WindowManager::getMainWindow()->setWindowSize(editor_x_resolution, editor_y_resolution); //, KRE::WindowSizeChangeFlags::NOTIFY_CANVAS_ONLY);
+//		graphics::GameScreen::get().setLocation(0, EDITOR_MENUBAR_HEIGHT);
 	}
 }
 
@@ -1251,7 +1338,7 @@ void editor::setup_for_editing()
 	change_tool(tool_);
 }
 
-bool editor::handleEvent(const SDL_Event& event, bool swallowed)
+bool BuiltinEditor::handleEvent(const SDL_Event& event, bool swallowed)
 {
 	const bool dialog_started_with_focus = (code_dialog_ && code_dialog_->hasFocus()) || (current_dialog_ && current_dialog_->hasFocus());
 	if(code_dialog_ && code_dialog_->processEvent(point(), event, swallowed)) {
@@ -1318,9 +1405,9 @@ bool editor::handleEvent(const SDL_Event& event, bool swallowed)
 	case SDL_MOUSEWHEEL: {
 			int mousex, mousey;
 			input::sdl_get_mouse_state(&mousex, &mousey);
-			
-			const int xpos = xpos_ + mousex*zoom_;
-			if(xpos < editor_x_resolution-sidebar_width()) {
+
+			//const int xpos = xpos_ + mousex*zoom_;
+			if(mousex < editor_x_resolution-sidebar_width()) {
 				if(event.wheel.y < 0) {
 					zoomIn();
 				} else {
@@ -1349,7 +1436,7 @@ bool editor::handleEvent(const SDL_Event& event, bool swallowed)
 	return false;
 }
 
-void editor::process()
+void BuiltinEditor::process()
 {
 	if(code_dialog_) {
 		code_dialog_->process();
@@ -1389,7 +1476,6 @@ void editor::process()
 
 	int mousex, mousey;
 	const unsigned int buttons = input::sdl_get_mouse_state(&mousex, &mousey) & mouse_buttons_down_;
-	//mousey -= EDITOR_MENUBAR_HEIGHT;
 
 	if(buttons == 0) {
 		drawing_rect_ = false;
@@ -1402,8 +1488,8 @@ void editor::process()
 	if(prev_mousex_ != -1 && prev_mousey_ != -1 && (buttons&SDL_BUTTON_MIDDLE)) {
 		const int diff_x = mousex - prev_mousex_;
 		const int diff_y = mousey - prev_mousey_;
-		xpos_ -= diff_x*zoom_;
-		ypos_ -= diff_y*zoom_;
+		middle_mouse_deltax_ = -diff_x*zoom_;
+		middle_mouse_deltay_ = -diff_y*zoom_;
 	}
 
 	prev_mousex_ = mousex;
@@ -1462,6 +1548,8 @@ void editor::process()
 				//drag operation will be undoable when we're done, so remove
 				//from the undo stack.
 				undo_.pop_back();
+
+				on_modify_level();
 			}
 		}
 	} else if(object_mode && !buttons) {
@@ -1529,15 +1617,23 @@ void editor::process()
 	//if we're drawing with a pencil see if we add a new tile
 	if(tool() == TOOL_PENCIL && dragging_ && buttons) {
 		const int xpos = xpos_ + mousex*zoom_;
-		const int ypos = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+		const int ypos = ypos_ + mousey*zoom_;
 		const int last_xpos = xpos_ + last_mousex*zoom_;
-		const int last_ypos = ypos_ + last_mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+		const int last_ypos = ypos_ + last_mousey*zoom_;
 
 		pencil_motion(last_xpos, last_ypos, xpos, ypos, buttons&SDL_BUTTON(SDL_BUTTON_LEFT));
 	}
 
 	for(LevelPtr lvl : levels_) {
-		lvl->complete_rebuild_tiles_in_background();
+		try {
+			const assert_recover_scope safe_scope;
+			lvl->complete_rebuild_tiles_in_background();
+		} catch(validation_failure_exception& e) {
+			if(!drawing_rect_) {
+				undo_command();
+			}
+			debug_console::addMessage(formatter() << "Failed to add tiles: " << e.msg);
+		}
 	}
 }
 
@@ -1644,6 +1740,8 @@ void editor::execute_shift_object(EntityPtr e, int dx, int dy)
 		}
 	}
 	end_command_group();
+
+	on_modify_level();
 }
 
 void editor::handleKeyPress(const SDL_KeyboardEvent& key)
@@ -1736,7 +1834,9 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 					}
 				}
 				end_command_group();
-			}else if(key.keysym.sym == SDLK_MINUS){
+
+				on_modify_level();
+			} else if(key.keysym.sym == SDLK_MINUS) {
 				begin_command_group();
 				for(LevelPtr lvl : levels_) {
 					EntityPtr obj = lvl->get_entity_by_label(v2.back()->label());
@@ -1747,6 +1847,8 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 					}
 				}
 				end_command_group();
+
+				on_modify_level();
 			}
 		}
 	}
@@ -1783,6 +1885,7 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 		executeCommand(
 		  std::bind(execute_functions, redo),
 		  std::bind(execute_functions, undo));
+		on_modify_level();
 	}
 
 	if(!tile_selection_.empty() && (key.keysym.sym == SDLK_DELETE || key.keysym.sym == SDLK_BACKSPACE)) {
@@ -1799,11 +1902,11 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 				min_y = std::min(y, min_y);
 				max_y = std::max(y, max_y);
 
-				redo.push_back([&](){ lvl->clear_tile_rect(x, y, x, y); });
+				redo.push_back([=](){ lvl->clear_tile_rect(x, y, x, y); });
 				std::map<int, std::vector<std::string> > old_tiles;
 				lvl->getAllTilesRect(x, y, x, y, old_tiles);
-				for(auto i : old_tiles) {
-					undo.push_back([=](){ lvl->addTileRectVector(i.first, x, y, x, y, i.second); });
+				for(auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+					undo.push_back([=](){ lvl->addTileRectVector(i->first, x, y, x, y, i->second); });
 				}
 			}
 
@@ -1816,6 +1919,7 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 		executeCommand(
 		  std::bind(execute_functions, redo),
 		  std::bind(execute_functions, undo));
+		on_modify_level();
 	}
 
 	if(key.keysym.sym == SDLK_o && (key.keysym.mod&KMOD_CTRL)) {
@@ -1865,10 +1969,18 @@ void editor::handleKeyPress(const SDL_KeyboardEvent& key)
 		}
 	}
 
+	if(key.keysym.sym == SDLK_n) {
+		add_new_sub_component();
+	}
 }
 
 void editor::handle_scrolling()
 {
+	xpos_ += middle_mouse_deltax_;
+	ypos_ += middle_mouse_deltay_;
+
+	middle_mouse_deltax_ = middle_mouse_deltay_ = 0;
+
 	if(code_dialog_ && code_dialog_->hasKeyboardFocus()) {
 		return;
 	}
@@ -1979,7 +2091,7 @@ void editor::handle_object_dragging(int mousex, int mousey)
 
 	const bool ctrl_pressed = (SDL_GetModState()&(KMOD_LCTRL|KMOD_RCTRL)) != 0;
 	const int dx = xpos_ + mousex*zoom_ - anchorx_;
-	const int dy = ypos_ + mousey*zoom_ - anchory_ - EDITOR_MENUBAR_HEIGHT;
+	const int dy = ypos_ + mousey*zoom_ - anchory_;
 	const int xpos = selected_entity_startx_ + dx;
 	const int ypos = selected_entity_starty_ + dy;
 
@@ -2028,16 +2140,17 @@ void editor::handle_object_dragging(int mousex, int mousey)
 
 		remove_ghost_objects();
 		ghost_objects_.clear();
+
+		on_modify_level();
 	}
 }
 
 void editor::handleDrawingRect(int mousex, int mousey)
 {
 	const unsigned int buttons = input::sdl_get_mouse_state(&mousex, &mousey);
-	//mousey -= EDITOR_MENUBAR_HEIGHT;
 
 	const int xpos = xpos_ + mousex*zoom_;
-	const int ypos = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	const int ypos = ypos_ + mousey*zoom_;
 
 	int x1 = xpos;
 	int x2 = anchorx_;
@@ -2087,12 +2200,61 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 	const bool alt_pressed = (SDL_GetModState()&KMOD_ALT) != 0;
 	int mousex, mousey;
 	const unsigned int buttons = input::sdl_get_mouse_state(&mousex, &mousey);
-	//mousey -= EDITOR_MENUBAR_HEIGHT;
 
 	anchorx_ = xpos_ + mousex*zoom_;
-	anchory_ = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	anchory_ = ypos_ + mousey*zoom_;
 	if(event.button == SDL_BUTTON_MIDDLE && !alt_pressed) {
 		return;
+	}
+
+	int nsub_index = 0;
+	for(const Level::SubComponent& sub : lvl_->getSubComponents()) {
+		rect addArea(findSubComponentArea(sub, xpos_, ypos_, zoom_));
+		bool addAreaMouseover = pointInRect(point(mousex,mousey), addArea);
+
+		//add another variation of this sub component.
+		if(addAreaMouseover) {
+
+			std::vector<std::function<void()> > redo, undo;
+
+			redo.push_back(std::bind(&editor::add_sub_component_variations, this, nsub_index, 1));
+			undo.push_back(std::bind(&editor::add_sub_component_variations, this, nsub_index, -1));
+
+			rect src(sub.source_area.x() + (sub.num_variations-1)*(TileSize*4 + sub.source_area.w()), sub.source_area.y(), sub.source_area.w(), sub.source_area.h());
+			rect dst(sub.source_area.x() + (sub.num_variations)*(TileSize*4 + sub.source_area.w()), sub.source_area.y(), sub.source_area.w(), sub.source_area.h());
+
+			copy_rectangle(src, dst, redo, undo, true);
+
+			executeCommand(
+			  std::bind(execute_functions, redo),
+			  std::bind(execute_functions, undo));
+			return;
+		}
+
+		dragging_sub_component = rect_top_edge_selected(sub.source_area, anchorx_, anchory_, zoom_);
+		resizing_sub_component_right_edge = rect_right_edge_selected(sub.source_area, anchorx_, anchory_, zoom_);
+		resizing_sub_component_bottom_edge = rect_bottom_edge_selected(sub.source_area, anchorx_, anchory_, zoom_);
+
+		if(dragging_sub_component || resizing_sub_component_right_edge || resizing_sub_component_bottom_edge) {
+			resizing_sub_component_index = nsub_index;
+			return;
+		}
+
+		++nsub_index;
+	}
+
+	dragging_sub_component_usage_index = -1;
+
+	nsub_index = 0;
+	for(const Level::SubComponentUsage& sub : lvl_->getSubComponentUsages()) {
+		rect area = sub.dest_area;
+		const bool mouse_over = rect_any_edge_selected(area, anchorx_, anchory_, zoom_);
+		if(mouse_over) {
+			dragging_sub_component_usage_index = nsub_index;
+			return;
+		}
+
+		++nsub_index;
 	}
 
 	resizing_left_level_edge = rect_left_edge_selected(lvl_->boundaries(), anchorx_, anchory_, zoom_);
@@ -2132,8 +2294,9 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 			  std::bind(execute_functions, redo),
 			  std::bind(execute_functions, undo));
 
-
 			start_adding_points(adding_points_);
+
+			on_modify_level();
 
 		} else {
 			start_adding_points("");
@@ -2263,6 +2426,8 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 			g_variable_editing = nullptr;
 			g_variable_editing_original_value = variant();
 			g_variable_editing_index = -1;
+
+			on_modify_level();
 		}
 
 		//If we select a variable to edit, return here so we don't select
@@ -2323,12 +2488,21 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 	}
 
 	if(tool() == TOOL_ADD_OBJECT && event.button == SDL_BUTTON_LEFT && !lvl_->editor_highlight()) {
-		const int xpos = anchorx_ - all_characters()[cur_object_].preview_object()->getCurrentFrame().width()/2;
-		const int ypos = anchory_ - all_characters()[cur_object_].preview_object()->getCurrentFrame().height()/2 + EDITOR_MENUBAR_HEIGHT;
+		int x = round_tile_size(xpos_ + mousex*zoom_) + TileSize/(2*zoom_);
+		int y = round_tile_size(ypos_ + mousey*zoom_) + TileSize/(2*zoom_);
+
+		if(ctrl_pressed) {
+			x = xpos_ + mousex*zoom_;
+			y = ypos_ + mousey*zoom_;
+		}
+
+		x -= all_characters()[cur_object_].preview_object()->getCurrentFrame().width()/2;
+		y -= all_characters()[cur_object_].preview_object()->getCurrentFrame().height()/2;
+
 		variant_builder node;
 		node.merge_object(all_characters()[cur_object_].node);
-		node.set("x", (ctrl_pressed ? xpos : round_tile_size(xpos)));
-		node.set("y", (ctrl_pressed ? ypos : round_tile_size(ypos)));
+		node.set("x", x);
+		node.set("y",  y);
 		node.set("face_right", face_right_);
 		node.set("upside_down", upside_down_);
 
@@ -2359,12 +2533,12 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 
 		//we only want to actually set the vars once we've calculated all of
 		//them, to avoid any ordering issues etc. So set them all here.
-		for(auto i : vars) {
+		for(const auto& i : vars) {
 			game_logic::FormulaCallable* obj_vars = c->queryValue("vars").mutable_callable();
 			obj_vars->mutateValue(i.first, i.second);
 		}
 
-		for(auto i : props) {
+		for(const auto& i : props) {
 			c->mutateValue(i.first, i.second);
 		}
 
@@ -2382,6 +2556,8 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 					  std::bind(&editor::add_object_to_level, this, lvl, &lvl->player()->getEntity()));
 				}
 				end_command_group();
+
+				on_modify_level();
 			} else {
 				begin_command_group();
 				for(LevelPtr lvl : levels_) {
@@ -2391,6 +2567,8 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 					  std::bind(&editor::add_object_to_level, this, lvl, &lvl->player()->getEntity()));
 				}
 				end_command_group();
+
+				on_modify_level();
 			}
 
 		} else {
@@ -2403,6 +2581,7 @@ void editor::handleMouseButtonDown(const SDL_MouseButtonEvent& event)
 				LOG_INFO("ADD OBJECT: " << obj->x() << "," << obj->y());
 			}
 			end_command_group();
+			on_modify_level();
 		}
 	}
 }
@@ -2411,10 +2590,9 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 {
 	int mousex, mousey;
 	input::sdl_get_mouse_state(&mousex, &mousey);
-	//mousey -= EDITOR_MENUBAR_HEIGHT;
 			
 	const int xpos = xpos_ + mousex*zoom_;
-	const int ypos = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+	const int ypos = ypos_ + mousey*zoom_;
 
 	if(g_variable_editing) {
 		if(property_dialog_ && property_dialog_->getEntity()) {
@@ -2432,8 +2610,140 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 			}
 			end_command_group();
 			property_dialog_->init();
+			on_modify_level();
 		}
 		g_variable_editing = nullptr;
+		return;
+	}
+
+	if(dragging_sub_component_usage_index != -1) {
+		const int dx = (xpos - anchorx_)/TileSize;
+		const int dy = (ypos - anchory_)/TileSize;
+
+		std::vector<Level::SubComponentUsage> usages = lvl_->getSubComponentUsages();
+		std::vector<Level::SubComponentUsage> new_usages = usages;
+
+		Level::SubComponentUsage& usage = new_usages[dragging_sub_component_usage_index];
+
+		if(dx == 0 && dy == 0) {
+			//no movement, is a click
+			if(event.button == SDL_BUTTON_RIGHT) {
+				//delete this usage with a right-click.
+				new_usages.erase(new_usages.begin() + dragging_sub_component_usage_index);
+			} else {
+				usage.ninstance = (usage.ninstance+1)%usage.getSubComponent(*lvl_).num_variations;
+			}
+
+		} else {
+
+			rect area = usage.dest_area;
+
+			area = rect(area.x() + dx*TileSize, area.y() + dy*TileSize, area.w(), area.h());
+
+			usage.dest_area = area;
+
+		}
+
+		executeCommand(
+			std::bind(&editor::set_sub_component_usage, this, new_usages),
+			std::bind(&editor::set_sub_component_usage, this, usages)
+		);
+
+		on_modify_level();
+
+		dragging_sub_component_usage_index = -1;
+		return;
+	}
+
+	if(dragging_sub_component) {
+		if(resizing_sub_component_index >= 0 && resizing_sub_component_index < lvl_->getSubComponents().size()) {
+			rect source_area = lvl_->getSubComponents()[resizing_sub_component_index].source_area;
+
+			int deltax = xpos - anchorx_;
+			int deltay = ypos - anchory_;
+
+			rect dest_area(source_area.x() + (deltax/TileSize)*TileSize, source_area.y() + (deltay/TileSize)*TileSize, source_area.w(), source_area.h());
+
+			if(!rects_intersect(source_area, dest_area)) {
+				std::vector<Level::SubComponentUsage> usages = lvl_->getSubComponentUsages();
+
+				executeCommand(
+					std::bind(&editor::add_sub_component_usage, this, resizing_sub_component_index, dest_area),
+					std::bind(&editor::set_sub_component_usage, this, usages)
+				);
+
+				on_modify_level();
+			}
+		}
+
+		dragging_sub_component = resizing_sub_component_right_edge = resizing_sub_component_bottom_edge = false;
+		return;
+	} else if(resizing_sub_component_right_edge || resizing_sub_component_bottom_edge) {
+		if(resizing_sub_component_index >= 0 && resizing_sub_component_index < lvl_->getSubComponents().size()) {
+
+			rect source_area = lvl_->getSubComponents()[resizing_sub_component_index].source_area;
+			rect orig_area = source_area;
+
+			if(resizing_sub_component_right_edge) {
+				int deltax = xpos - anchorx_;
+				int w = (std::max<int>(TileSize, source_area.w() + deltax)/TileSize)*TileSize;
+
+				source_area = rect(source_area.x(), source_area.y(), w, source_area.h());
+			}
+
+			int deltah = 0;
+
+			if(resizing_sub_component_bottom_edge) {
+				int deltay = ypos - anchory_;
+				int h = (std::max<int>(TileSize, source_area.h() + deltay)/TileSize)*TileSize;
+
+				deltah = h - source_area.h();
+
+				source_area = rect(source_area.x(), source_area.y(), source_area.w(), h);
+			}
+
+			std::vector<std::function<void()>> redo, undo;
+
+			if(deltah != 0) {
+				//shuffle all areas below us downwards
+				std::vector<int> indexes;
+				std::vector<Level::SubComponent> subs;
+				for(int n = resizing_sub_component_index+1; n < lvl_->getSubComponents().size(); ++n) {
+					subs.push_back(lvl_->getSubComponents()[n]);
+					indexes.push_back(n);
+				}
+
+				if(deltah > 0) {
+					std::reverse(subs.begin(), subs.end());
+					std::reverse(indexes.begin(), indexes.end());
+				}
+
+				int n = 0;
+				for(const Level::SubComponent& sub : subs) {
+					rect sub_orig_area = sub.source_area;
+					rect sub_new_area(sub_orig_area.x(), sub_orig_area.y()+deltah, sub_orig_area.w(), sub_orig_area.h());
+
+					redo.push_back(std::bind(&editor::set_sub_component_area, this, indexes[n], sub_new_area));
+					undo.push_back(std::bind(&editor::set_sub_component_area, this, indexes[n], sub_orig_area));
+
+					clear_rectangle(sub_orig_area, redo, undo);
+					copy_rectangle(sub_orig_area, sub_new_area, redo, undo, true);
+
+					++n;
+				}
+			}
+
+			redo.push_back(std::bind(&editor::set_sub_component_area, this, resizing_sub_component_index, source_area));
+			undo.push_back(std::bind(&editor::set_sub_component_area, this, resizing_sub_component_index, orig_area));
+
+			executeCommand(
+			  std::bind(execute_functions, redo),
+			  std::bind(execute_functions, undo));
+
+			on_modify_level();
+		}
+
+		dragging_sub_component = resizing_sub_component_right_edge = resizing_sub_component_bottom_edge = false;
 		return;
 	}
 
@@ -2443,13 +2753,46 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 		resizing_left_level_edge = resizing_right_level_edge = resizing_top_level_edge = resizing_bottom_level_edge = false;
 
 		if(boundaries != lvl_->boundaries()) {
+			const int deltay = boundaries.y2() - lvl_->boundaries().y2();
+
 			begin_command_group();
+
+			std::vector<std::function<void()>> redo, undo;
 			for(LevelPtr lvl : levels_) {
-				executeCommand(
-				  std::bind(&Level::set_boundaries, lvl.get(), boundaries),
-				  std::bind(&Level::set_boundaries, lvl.get(), lvl->boundaries()));
+				redo.push_back(std::bind(&Level::set_boundaries, lvl.get(), boundaries));
+				undo.push_back(std::bind(&Level::set_boundaries, lvl.get(), lvl->boundaries()));
+
 			}
+
+			int nsub = 0;
+			std::vector<Level::SubComponent> subs = lvl_->getSubComponents();
+			std::vector<int> indexes;
+			for(int n = 0; n != subs.size(); ++n) {
+				indexes.push_back(n);
+			}
+
+			if(deltay > 0) {
+				std::reverse(subs.begin(), subs.end());
+				std::reverse(indexes.begin(), indexes.end());
+			}
+			for(const Level::SubComponent& sub : subs) {
+				rect area = sub.source_area;
+				rect new_area(area.x(), area.y() + deltay, area.w(), area.h());
+
+				clear_rectangle(area, redo, undo);
+				copy_rectangle(area, new_area, redo, undo, true);
+
+				redo.push_back(std::bind(&editor::set_sub_component_area, this, indexes[nsub], new_area));
+				undo.push_back(std::bind(&editor::set_sub_component_area, this, indexes[nsub], area));
+				++nsub;
+			}
+
+			executeCommand(
+			  std::bind(execute_functions, redo),
+			  std::bind(execute_functions, undo));
+
 			end_command_group();
+			on_modify_level();
 		}
 		return;
 	}
@@ -2458,7 +2801,7 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 	if(editing_tiles()) {
 		if(dragging_) {
 			const int selectx = xpos_ + mousex*zoom_;
-			const int selecty = ypos_ + mousey*zoom_ - EDITOR_MENUBAR_HEIGHT;
+			const int selecty = ypos_ + mousey*zoom_;
 
 			//dragging selection
 			int diffx = (selectx - anchorx_)/TileSize;
@@ -2491,9 +2834,11 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 
 					std::map<int, std::vector<std::string> > old_tiles;
 					lvl->getAllTilesRect(x, y, x, y, old_tiles);
-					for(auto i : old_tiles) {
-						undo.push_back([=](){ lvl->addTileRectVector(i.first, x, y, x, y, i.second); });
-						redo.push_back([=](){ lvl->addTileRectVector(i.first, x, y, x, y, std::vector<std::string>(1,"")); });
+					for (auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+						int zorder = i->first;
+						std::vector<std::string> tiles = i->second;
+						undo.push_back([=](){ lvl->addTileRectVector(zorder, x, y, x, y, tiles); });
+						redo.push_back([=](){ lvl->addTileRectVector(zorder, x, y, x, y, std::vector<std::string>(1,"")); });
 					}
 
 					old_tiles.clear();
@@ -2507,9 +2852,11 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 					max_y = std::max(y, max_y);
 
 					lvl->getAllTilesRect(x, y, x, y, old_tiles);
-					for(auto i : old_tiles) {
-						undo.push_back([=](){ lvl->addTileRectVector(i.first, x, y, x, y, i.second); });
-						redo.push_back([=](){ lvl->addTileRectVector(i.first, x, y, x, y, std::vector<std::string>(1,"")); });
+					for (auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+						int zorder = i->first;
+						std::vector<std::string> tiles = i->second;
+						undo.push_back([=](){ lvl->addTileRectVector(zorder, x, y, x, y, tiles); });
+						redo.push_back([=](){ lvl->addTileRectVector(zorder, x, y, x, y, std::vector<std::string>(1,"")); });
 					}
 				}
 
@@ -2525,8 +2872,10 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 	
 					std::map<int, std::vector<std::string> > old_tiles;
 					lvl->getAllTilesRect(x, y, x, y, old_tiles);
-					for(auto i : old_tiles) {
-						redo.push_back([=](){ lvl->addTileRectVector(i.first, x + diffx*TileSize, y + diffy*TileSize, x + diffx*TileSize, y + diffy*TileSize, i.second); });
+					for (auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+						int zorder = i->first;
+						std::vector<std::string> tiles = i->second;
+						redo.push_back([=](){ lvl->addTileRectVector(zorder, x + diffx*TileSize, y + diffy*TileSize, x + diffx*TileSize, y + diffy*TileSize, tiles); });
 					}
 				}
 
@@ -2671,6 +3020,7 @@ void editor::handleMouseButtonUp(const SDL_MouseButtonEvent& event)
 			executeCommand(
 			  std::bind(execute_functions, redo),
 			  std::bind(execute_functions, undo));
+			on_modify_level();
 		} else if(tool() == TOOL_SELECT_OBJECT && drawing_rect_) {
 			std::vector<EntityPtr> chars = lvl_->get_characters_in_rect(rect::from_coordinates(anchorx_, anchory_, xpos, ypos), xpos_, ypos_);
 			if(chars.empty()) {
@@ -2773,6 +3123,7 @@ void editor::add_tile_rect(int zorder, const std::string& tile_id, int x1, int y
 	executeCommand(
 	  std::bind(execute_functions, redo),
 	  std::bind(execute_functions, undo));
+	on_modify_level();
 
 	if(layers_dialog_) {
 		layers_dialog_->init();
@@ -2814,14 +3165,25 @@ void editor::remove_tile_rect(int x1, int y1, int x2, int y2)
 
 		std::map<int, std::vector<std::string> > old_tiles;
 		lvl->getAllTilesRect(x1, y1, x2, y2, old_tiles);
-		for(auto i : old_tiles) {
-			undo.push_back([=](){ lvl->addTileRectVector(i.first, x1, y1, x2, y2, i.second); });
+		std::vector<int> layers;
+		for (auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+			if(std::count(layers.begin(), layers.end(), i->first) == 0) {
+				layers.push_back(i->first);
+			}
+
+			int key = i->first;
+			std::vector<std::string> value = i->second;
+			undo.push_back([=](){ lvl->addTileRectVector(key, x1, y1, x2, y2, value); });
 		}
 
 		redo.push_back([=](){ lvl->clear_tile_rect(x1, y1, x2, y2); });
+
+		undo.push_back(std::bind(&Level::start_rebuild_tiles_in_background, lvl.get(), layers));
+		redo.push_back(std::bind(&Level::start_rebuild_tiles_in_background, lvl.get(), layers));
 	}
 
 	executeCommand(std::bind(execute_functions, redo), std::bind(execute_functions, undo));
+	on_modify_level();
 }
 
 void editor::select_tile_rect(int x1, int y1, int x2, int y2)
@@ -3235,15 +3597,14 @@ void editor::zoomOut()
 	}
 }
 
-void editor::draw_gui() const
+void BuiltinEditor::draw_gui() const
 {
 	auto canvas = KRE::Canvas::getInstance();
-	auto mm = std::unique_ptr<KRE::ModelManager2D>(new KRE::ModelManager2D(-xpos_, EDITOR_MENUBAR_HEIGHT-ypos_, 0, 1.0f/zoom_));
+	auto mm = std::unique_ptr<KRE::ModelManager2D>(new KRE::ModelManager2D(-xpos_, -ypos_, 0, 1.0f/zoom_));
 
 	const bool ctrl_pressed = (SDL_GetModState()&(KMOD_LCTRL|KMOD_RCTRL)) != 0;
 	int mousex, mousey;
 	input::sdl_get_mouse_state(&mousex, &mousey);
-	//mousey -= EDITOR_MENUBAR_HEIGHT;
 	const int selectx = xpos_ + mousex*zoom_;
 	const int selecty = ypos_ + mousey*zoom_;
 
@@ -3257,9 +3618,18 @@ void editor::draw_gui() const
 		previous_level = "(no previous level)";
 	}
 	auto t = KRE::Font::getInstance()->renderText(previous_level, KRE::Color::colorBlack(), 24);
+	auto t2 = KRE::Font::getInstance()->renderText(previous_level, KRE::Color::colorWhite(), 24);
 	int x = lvl_->boundaries().x() - t->width();
 	int y = ypos_ + canvas->height()/2;
+
+	//outline the text with white to make it readable against any background
+	canvas->blitTexture(t2, 0, rect(x-2,y,0,0));
+	canvas->blitTexture(t2, 0, rect(x+2,y,0,0));
+	canvas->blitTexture(t2, 0, rect(x,y-2,0,0));
+	canvas->blitTexture(t2, 0, rect(x,y+2,0,0));
+
 	canvas->blitTexture(t, 0, rect(x,y,0,0));
+	
 
 	t = KRE::Font::getInstance()->renderText(next_level, KRE::Color::colorBlack(), 24);
 	x = lvl_->boundaries().x2();
@@ -3268,14 +3638,16 @@ void editor::draw_gui() const
 
 	if(tool() == TOOL_ADD_OBJECT && !lvl_->editor_highlight()) {
 		Entity& e = *all_characters()[cur_object_].preview_object();
-		const int xpos = xpos_ - e.getCurrentFrame().width()/2;
-		const int ypos = ypos_ - e.getCurrentFrame().height()/2;
-		int x = round_tile_size(xpos + mousex*zoom_);
-		int y = round_tile_size(ypos + mousey*zoom_);
+		int x = round_tile_size(xpos_ + mousex*zoom_) + TileSize/(2*zoom_);
+		int y = round_tile_size(ypos_ + mousey*zoom_) + TileSize/(2*zoom_);
+
 		if(ctrl_pressed) {
-			x = xpos + mousex*zoom_;
-			y = ypos + mousey*zoom_;
+			x = xpos_ + mousex*zoom_;
+			y = ypos_ + mousey*zoom_;
 		}
+
+		x -= e.getCurrentFrame().width()/2;
+		y -= e.getCurrentFrame().height()/2;
 
 		e.setPos(x, y);
 		if(place_entity_in_level(*lvl_, e)) {
@@ -3413,17 +3785,33 @@ void editor::draw_gui() const
 		std::vector<glm::u8vec4> carray;
 		const int w = canvas->width();
 		const int h = canvas->height();
-		for(int x = -TileSize - (xpos_/zoom_)%TileSize; x < w; x += (BaseTileSize*g_tile_scale)/zoom_) {
+		for(int x = -TileSize - (xpos_%TileSize)/zoom_; x < w; x += (BaseTileSize*g_tile_scale)/zoom_) {
 			varray.emplace_back(x, 0);
 			varray.emplace_back(x, h);
-			carray.emplace_back(255, 255, 255, 64);
-			carray.emplace_back(255, 255, 255, 32);
+
+			const int xco = xpos_ + x*zoom_;
+
+			if(std::abs(xco) <= zoom_) {
+				carray.emplace_back(255, 128, 128, 255);
+				carray.emplace_back(255, 128, 128, 255);
+			} else {
+				carray.emplace_back(255, 255, 255, 96);
+				carray.emplace_back(255, 255, 255, 96);
+			}
 		}
-		for(int y = /*EDITOR_MENUBAR_HEIGHT*/ - TileSize - (ypos_/zoom_)%TileSize; y < h; y += (BaseTileSize*g_tile_scale)/zoom_) {
+		for(int y = -TileSize - (ypos_%TileSize)/zoom_; y < h; y += (BaseTileSize*g_tile_scale)/zoom_) {
 			varray.emplace_back(0, y);
 			varray.emplace_back(w, y);
-			carray.emplace_back(255, 255, 255, 32);
-			carray.emplace_back(255, 255, 255, 64);
+
+			const int yco = ypos_ + y*zoom_;
+
+			if(std::abs(yco) <= zoom_) {
+				carray.emplace_back(255, 128, 128, 255);
+				carray.emplace_back(255, 128, 128, 255);
+			} else {
+				carray.emplace_back(255, 255, 255, 96);
+				carray.emplace_back(255, 255, 255, 96);
+			}
 		}
 		//canvas->drawLines(varray, 1.0f, KRE::Color(255,255,255,64));
 		canvas->drawLines(varray, 1.0f, carray);
@@ -3437,8 +3825,8 @@ void editor::draw_gui() const
 		rect boundaries = modify_selected_rect(*this, lvl_->boundaries(), selectx, selecty);
 		const int x1 = boundaries.x()/zoom_;
 		const int x2 = boundaries.x2()/zoom_;
-		const int y1 = boundaries.y()/zoom_+EDITOR_MENUBAR_HEIGHT;
-		const int y2 = boundaries.y2()/zoom_+EDITOR_MENUBAR_HEIGHT;
+		const int y1 = boundaries.y()/zoom_;
+		const int y2 = boundaries.y2()/zoom_;
 		
 		glm::u8vec4 selected_color = KRE::Color::colorYellow().as_u8vec4();
 		glm::u8vec4 normal_color = KRE::Color::colorWhite().as_u8vec4();
@@ -3508,6 +3896,270 @@ void editor::draw_gui() const
 		}
 		
 		canvas->drawLines(varray, 1.0f, carray);
+	}
+
+	//draw level sub-components
+	int nsub = 0;
+	for(const Level::SubComponent& sub : lvl_->getSubComponents()) {
+
+		std::vector<glm::vec2> varray;
+		std::vector<glm::u8vec4> carray;
+
+		{
+
+			rect source_area = sub.source_area;
+			rect area(source_area.x() + -(source_area.w()+TileSize*4), source_area.y(), source_area.w(), source_area.h());
+
+			std::vector<rect> areas;
+			areas.push_back(area);
+
+			if(LevelRunner::getCurrent()->is_paused()) {
+				for(const Level::SubComponentUsage& usage : lvl_->getSubComponentUsages()) {
+					if(usage.ncomponent == nsub) {
+						rect usage_area(usage.dest_area.x(), usage.dest_area.y(), usage.dest_area.w(), usage.dest_area.h());
+						areas.push_back(usage_area);
+					}
+				}
+			}
+
+			const int x1 = area.x()/zoom_;
+			const int x2 = area.x2()/zoom_;
+			const int y1 = area.y()/zoom_;
+			const int y2 = area.y2()/zoom_;
+
+			varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+			varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+			varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+			varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+			for(int n = 0; n != 8; ++n) {
+				carray.emplace_back(KRE::Color::colorBlue().as_u8vec4());
+			}
+
+			KRE::Color solid_color(255, 255, 255, 255);
+			KRE::Color semi_color(127, 127, 127, 255);
+
+			for(int ypos = 0; ypos < area.h(); ypos += TileSize) {
+				for(int xpos = 0; xpos < area.w(); xpos += TileSize) {
+					int nsolid = 0;
+					for(int i = 0; i < sub.num_variations; ++i) {
+						rect var_area(source_area.x() + (source_area.w()+TileSize*4)*i, source_area.y(), source_area.w(), source_area.h());
+						if(lvl_->solid(var_area.x() + xpos + TileSize/2, var_area.y() + ypos + TileSize/2)) {
+							++nsolid;
+						}
+					}
+
+					if(nsolid > 0) {
+
+						for(const rect& area : areas) {
+							const int next_xpos = xpos + TileSize;
+							const int next_ypos = ypos + TileSize;
+
+							const int px_x = ((area.x() + xpos) - xpos_)/zoom_;
+							const int px_y = ((area.y() + ypos) - ypos_)/zoom_;
+							const int px_x2 = ((area.x() + next_xpos) - xpos_)/zoom_;
+							const int px_y2 = ((area.y() + next_ypos) - ypos_)/zoom_;
+
+							rect tile_area(px_x, px_y, px_x2 - px_x, px_y2 - px_y);
+							canvas->drawSolidRect(tile_area, nsolid == sub.num_variations ? solid_color : semi_color);
+						}
+					}
+				}
+			}
+		}
+
+		for(int i = 0; i < sub.num_variations; ++i) {
+
+			rect source_area = sub.source_area;
+			bool dragging_right = resizing_sub_component_right_edge && resizing_sub_component_index == nsub;
+			bool dragging_bottom = resizing_sub_component_bottom_edge && resizing_sub_component_index == nsub;
+
+			if(dragging_right) {
+				int deltax = xpos_ + mousex*zoom_ - anchorx_;
+
+				int w = (std::max<int>(TileSize, source_area.w() + deltax)/TileSize)*TileSize;
+
+				source_area = rect(source_area.x(), source_area.y(), w, source_area.h());
+			}
+
+			if(dragging_bottom) {
+				int deltay = ypos_ + mousey*zoom_ - anchory_;
+
+				int h = (std::max<int>(TileSize, source_area.h() + deltay)/TileSize)*TileSize;
+
+				source_area = rect(source_area.x(), source_area.y(), source_area.w(), h);
+			}
+
+			rect area(source_area.x() + (source_area.w()+TileSize*4)*i, source_area.y(), source_area.w(), source_area.h());
+
+			const int x1 = area.x()/zoom_;
+			const int x2 = area.x2()/zoom_;
+			const int y1 = area.y()/zoom_;
+			const int y2 = area.y2()/zoom_;
+
+			glm::u8vec4 selected_color = KRE::Color::colorYellow().as_u8vec4();
+			glm::u8vec4 normal_color = KRE::Color::colorRed().as_u8vec4();
+
+			if(rect_top_edge_selected(area, selectx, selecty, zoom_)) {
+				normal_color = selected_color;
+			}
+
+			varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+			carray.emplace_back(normal_color);
+			carray.emplace_back(normal_color);
+
+			varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+			if(i == 0 && (rect_right_edge_selected(area, selectx, selecty, zoom_) || dragging_right)) {
+				carray.emplace_back(selected_color);
+				carray.emplace_back(selected_color);
+			} else {
+				carray.emplace_back(normal_color);
+				carray.emplace_back(normal_color);
+			}
+
+			varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+			if(i == 0 && (rect_bottom_edge_selected(area, selectx, selecty, zoom_) || dragging_bottom)) {
+				carray.emplace_back(selected_color);
+				carray.emplace_back(selected_color);
+			} else {
+				carray.emplace_back(normal_color);
+				carray.emplace_back(normal_color);
+			}
+
+			varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+			carray.emplace_back(normal_color);
+			carray.emplace_back(normal_color);
+
+			if(dragging_sub_component && resizing_sub_component_index == nsub) {
+				//dragging a new sub-component usage, draw the rectangle
+				int deltax = ((xpos_ + mousex*zoom_ - anchorx_)/TileSize)*TileSize;
+				int deltay = ((ypos_ + mousey*zoom_ - anchory_)/TileSize)*TileSize;
+
+				rect dest_area(source_area.x() + deltax, source_area.y() + deltay, source_area.w(), source_area.h());
+
+				const int x1 = dest_area.x()/zoom_;
+				const int x2 = dest_area.x2()/zoom_;
+				const int y1 = dest_area.y()/zoom_;
+				const int y2 = dest_area.y2()/zoom_;
+
+				varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+				varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+				varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+				varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+				varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+				varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+				varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+				varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+				for(int n = 0; n != 8; ++n) {
+					carray.emplace_back(selected_color);
+				}
+			}
+		}
+
+		canvas->drawLines(varray, 1.0f, carray);
+
+		rect addArea(findSubComponentArea(sub, xpos_, ypos_, zoom_));
+		bool addAreaMouseover = pointInRect(point(mousex,mousey), addArea);
+		canvas->drawSolidRect(addArea, KRE::Color(addAreaMouseover ? 255 : 0, 255, 0, 255));
+
+		rect vertCross(addArea.x() + int(addArea.w()*0.4), addArea.y() + int(addArea.h()*0.2), int(addArea.w()*0.2), int(addArea.h()*0.6));
+		canvas->drawSolidRect(vertCross, KRE::Color(255,255,255,255));
+
+		rect horzCross(addArea.x() + int(addArea.w()*0.2), addArea.y() + int(addArea.h()*0.4), int(addArea.w()*0.6), int(addArea.h()*0.2));
+		canvas->drawSolidRect(horzCross, KRE::Color(255,255,255,255));
+		
+		++nsub;
+	}
+
+	int nsub_index = 0;
+	for(const Level::SubComponentUsage& sub : lvl_->getSubComponentUsages()) {
+		rect area = sub.dest_area;
+
+		const bool dragging = (dragging_sub_component_usage_index == nsub_index);
+		const bool mouse_over = rect_any_edge_selected(area, selectx, selecty, zoom_) || dragging;
+
+		if(dragging) {
+			const int dx = (selectx - anchorx_)/TileSize;
+			const int dy = (selecty - anchory_)/TileSize;
+
+			area = rect(area.x() + dx*TileSize, area.y() + dy*TileSize, area.w(), area.h());
+		}
+
+		const int x1 = area.x()/zoom_;
+		const int x2 = area.x2()/zoom_;
+		const int y1 = area.y()/zoom_;
+		const int y2 = area.y2()/zoom_;
+
+		glm::u8vec4 selected_color = KRE::Color::colorYellow().as_u8vec4();
+		glm::u8vec4 normal_color = KRE::Color::colorBlue().as_u8vec4();
+
+		std::vector<glm::vec2> varray;
+		std::vector<glm::u8vec4> carray;
+
+		varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+		varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+		varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+		varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+		varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+		varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+
+		varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+		varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+
+		for(int i = 0; i != 8; ++i) {
+			carray.emplace_back(mouse_over ? selected_color : normal_color);
+		}
+
+		if(pointInRect(point(selectx, selecty), area)) {
+			ASSERT_LOG(sub.ncomponent < lvl_->getSubComponents().size(), "Illegal component: " << sub.ncomponent);
+			rect src_area = sub.getSourceArea(*lvl_);
+
+			const int src_x1 = src_area.x()/zoom_;
+			const int src_x2 = src_area.x2()/zoom_;
+			const int src_y1 = src_area.y()/zoom_;
+			const int src_y2 = src_area.y2()/zoom_;
+
+			varray.emplace_back(x1 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(src_x1 - xpos_/zoom_, src_y1 - ypos_/zoom_);
+
+			varray.emplace_back(x1 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(src_x1 - xpos_/zoom_, src_y2 - ypos_/zoom_);
+
+			varray.emplace_back(x2 - xpos_/zoom_, y2 - ypos_/zoom_);
+			varray.emplace_back(src_x2 - xpos_/zoom_, src_y2 - ypos_/zoom_);
+
+			varray.emplace_back(x2 - xpos_/zoom_, y1 - ypos_/zoom_);
+			varray.emplace_back(src_x2 - xpos_/zoom_, src_y1 - ypos_/zoom_);
+
+			for(int i = 0; i != 4; ++i) {
+				carray.emplace_back(normal_color);
+				carray.emplace_back(KRE::Color::colorRed().as_u8vec4());
+			}
+		}
+
+		canvas->drawLines(varray, 2.0f, carray);
+		++nsub_index;
 	}
 
 	draw_selection(0, 0);
@@ -3593,7 +4245,7 @@ void editor::draw_selection(int xoffset, int yoffset) const
 	for(const point& p : tile_selection_.tiles) {
 		const int size = TileSize/zoom_;
 		const int xpos = xoffset/zoom_ + p.x*size - xpos_/zoom_;
-		const int ypos = yoffset/zoom_ + p.y*size - ypos_/zoom_ + EDITOR_MENUBAR_HEIGHT;
+		const int ypos = yoffset/zoom_ + p.y*size - ypos_/zoom_;
 
 		if(std::binary_search(tile_selection_.tiles.begin(), tile_selection_.tiles.end(), point(p.x, p.y - 1)) == false) {
 			varray.emplace_back(xpos, ypos);
@@ -3646,6 +4298,20 @@ void editor::executeCommand(std::function<void()> command, std::function<void()>
 	redo_.clear();
 
 	autosave_level();
+}
+
+void editor::on_modify_level()
+{
+	for(const Level::SubComponentUsage& usage : lvl_->getSubComponentUsagesOrdered()) {
+		const rect& dst = usage.dest_area;
+		const rect& src = usage.getSourceArea(*lvl_);
+
+		std::vector<std::function<void()>> redo, undo;
+		copy_rectangle(src, dst, redo, undo);
+		for(auto& fn : redo) {
+			fn();
+		}
+	}
 }
 
 void editor::begin_command_group()
@@ -3709,6 +4375,8 @@ void editor::undo_command()
 	if(layers_dialog_) {
 		layers_dialog_->init();
 	}
+
+	on_modify_level();
 }
 
 void editor::redo_command()
@@ -3726,6 +4394,8 @@ void editor::redo_command()
 	if(layers_dialog_) {
 		layers_dialog_->init();
 	}
+
+	on_modify_level();
 }
 
 void show_object_editor_dialog(const std::string& obj_type);
@@ -3998,13 +4668,12 @@ void editor::set_code_file()
 			variant v = obj_instance->write();
 			const std::string pseudo_fname = "@instance:" + obj_instance->label();
 			json::set_file_contents(pseudo_fname, v.write_json());
-			if(path) {
-				code_dialog_->load_file(*path);
-			}
 	
 			std::function<void()> fn(std::bind(&editor::object_instance_modified_in_editor, this, obj_instance->label()));
 			code_dialog_->load_file(pseudo_fname, true, &fn);
-		} else if(path) {
+		}
+		
+		if(path) {
 			code_dialog_->load_file(*path);
 		}
 	}
@@ -4039,7 +4708,221 @@ void editor::object_instance_modified_in_editor(const std::string& label)
 	executeCommand(
 	  std::bind(execute_functions, redo),
 	  std::bind(execute_functions, undo));
+	on_modify_level();
 }
 
-#endif // !NO_EDITOR
+void editor::add_new_sub_component()
+{
+	std::vector<std::function<void()> > redo, undo;
 
+	int w = TileSize*16;
+	int h = TileSize*16;
+
+	const bool has_usage = (selection().empty() == false);
+
+	if(has_usage) {
+		int min_x = selection().tiles.front().x*TileSize;
+		int max_x = selection().tiles.front().x*TileSize;
+		int min_y = selection().tiles.front().y*TileSize;
+		int max_y = selection().tiles.front().y*TileSize;
+		for(const point& p : selection().tiles) {
+			min_x = std::min<int>(p.x*TileSize, min_x);
+			min_y = std::min<int>(p.y*TileSize, min_y);
+			max_x = std::max<int>(p.x*TileSize, max_x);
+			max_y = std::max<int>(p.y*TileSize, max_y);
+		}
+
+		max_x += TileSize;
+		max_y += TileSize;
+
+		rect area(min_x, min_y, max_x - min_x, max_y - min_y);
+		w = area.w();
+		h = area.h();
+
+		std::vector<Level::SubComponentUsage> usage = lvl_->getSubComponentUsages();
+
+		redo.push_back(std::bind(&editor::add_sub_component_usage, this, lvl_->getSubComponents().size(), area));
+		undo.push_back(std::bind(&editor::set_sub_component_usage, this, usage));
+	}
+
+	redo.insert(redo.begin(), std::bind(&editor::add_sub_component, this, w, h));
+	undo.insert(undo.begin(), std::bind(&editor::remove_sub_component, this));
+
+	begin_command_group();
+
+	executeCommand(
+	  std::bind(execute_functions, redo),
+	  std::bind(execute_functions, undo));
+
+	undo.clear();
+	redo.clear();
+
+
+	if(has_usage) {
+		const auto& usage = lvl_->getSubComponentUsages().back();
+		const auto& sub = lvl_->getSubComponents()[usage.ncomponent];
+		copy_rectangle(usage.dest_area, sub.source_area, redo, undo);
+	}
+
+	executeCommand(
+	  std::bind(execute_functions, redo),
+	  std::bind(execute_functions, undo));
+
+	end_command_group();
+
+	on_modify_level();
+}
+
+void editor::add_sub_component(int w, int h)
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->addSubComponent(w, h);
+	}
+}
+
+void editor::remove_sub_component()
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->removeSubComponent();
+	}
+}
+
+void editor::add_sub_component_variations(int nsub, int delta)
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->addSubComponentVariations(nsub, delta);
+	}
+}
+
+void editor::set_sub_component_area(int nsub, rect area)
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->setSubComponentArea(nsub, area);
+	}
+}
+
+void editor::add_sub_component_usage(int nsub, rect area)
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->addSubComponentUsage(nsub, area);
+	}
+}
+
+void editor::set_sub_component_usage(std::vector<Level::SubComponentUsage> u)
+{
+	for(LevelPtr lvl : levels_) {
+		lvl->setSubComponentUsages(u);
+	}
+}
+
+void editor::clear_rectangle(const rect& area, std::vector<std::function<void()>>& redo, std::vector<std::function<void()>>& undo)
+{
+	const rect tile_area(area.x(), area.y(), area.w()-TileSize, area.h()-TileSize);
+	for(LevelPtr lvl : levels_) {
+		std::map<int, std::vector<std::string> > old_tiles;
+		lvl->getAllTilesRect(tile_area.x(), tile_area.y(), tile_area.x2(), tile_area.y2(), old_tiles);
+
+		redo.push_back([=]() { lvl->clear_tile_rect(area.x(), area.y(), area.x() + area.w(), area.y() + area.h()); });
+		for (auto i = old_tiles.begin(); i != old_tiles.end(); ++i) {
+			undo.push_back([=]() { lvl->addTileRectVector(i->first, area.x(), area.y(), area.x()+area.w(), area.y()+area.h(), i->second); });
+		}
+
+		std::vector<EntityPtr> chars = lvl->get_chars();
+		for(auto c : chars) {
+			if(c->x() >= area.x() && c->x() <= area.x2() && c->y() >= area.y() && c->y() <= area.y2()) {
+				redo.push_back(std::bind(&Level::remove_character, lvl.get(), c));
+				undo.push_back(std::bind(&Level::add_character, lvl.get(), c));
+			}
+		}
+
+		std::vector<Level::SubComponentUsage> usages, old_usages = lvl_->getSubComponentUsages();
+		
+		for(const Level::SubComponentUsage& usage : old_usages) {
+			if(!rects_intersect(usage.dest_area, area)) {
+				usages.push_back(usage);
+			}
+		}
+
+		if(usages.size() != old_usages.size()) {
+			redo.push_back(std::bind(&Level::setSubComponentUsages, lvl.get(), usages));
+			undo.push_back(std::bind(&Level::setSubComponentUsages, lvl.get(), old_usages));
+		}
+	}
+}
+
+
+void editor::copy_rectangle(const rect& src, const rect& dst, std::vector<std::function<void()>>& redo, std::vector<std::function<void()>>& undo, bool copy_usages)
+{
+	const rect tile_src(src.x(), src.y(), src.w()-TileSize, src.h()-TileSize);
+	const rect tile_dst(dst.x(), dst.y(), dst.w()-TileSize, dst.h()-TileSize);
+	for(LevelPtr lvl : levels_) {
+		std::map<int, std::vector<std::string> > src_tiles, dst_tiles;
+		lvl->getAllTilesRect(tile_src.x(), tile_src.y(), tile_src.x2(), tile_src.y2(), src_tiles);
+		lvl->getAllTilesRect(tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2(), dst_tiles);
+
+		redo.push_back([=]() { lvl->clear_tile_rect(tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2()); });
+		undo.push_back([=]() { lvl->clear_tile_rect(tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2()); });
+
+		for(auto& p : src_tiles) {
+			redo.push_back([=]() { lvl->addTileRectVector(p.first, tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2(), p.second); });
+		}
+
+		for(auto& p : dst_tiles) {
+			undo.push_back([=]() { lvl->addTileRectVector(p.first, tile_dst.x(), tile_dst.y(), tile_dst.x2(), tile_dst.y2(), p.second); });
+		}
+
+		std::vector<EntityPtr> chars = lvl->get_chars();
+		for(auto c : chars) {
+			if(c->x() >= dst.x() && c->x() <= dst.x2() && c->y() >= dst.y() && c->y() <= dst.y2()) {
+				redo.push_back(std::bind(&Level::remove_character, lvl.get(), c));
+				undo.push_back(std::bind(&Level::add_character, lvl.get(), c));
+			}
+		}
+
+		chars = levels_.front()->get_chars();
+
+		for(auto c : chars) {
+			if(c->x() >= src.x() && c->x() <= src.x2() && c->y() >= src.y() && c->y() <= src.y2()) {
+				auto clone = c->clone();
+				clone->shiftPosition(dst.x() - src.x(), dst.y() - src.y());
+				redo.push_back(std::bind(&Level::add_character, lvl.get(), clone));
+				undo.push_back(std::bind(&Level::remove_character, lvl.get(), clone));
+			}
+		}
+
+		undo.push_back(std::bind(&Level::start_rebuild_tiles_in_background, lvl.get(), std::vector<int>()));
+		redo.push_back(std::bind(&Level::start_rebuild_tiles_in_background, lvl.get(), std::vector<int>()));
+
+		if(copy_usages) {
+			std::vector<Level::SubComponentUsage> usages;
+			
+			for(const Level::SubComponentUsage& usage : lvl_->getSubComponentUsages()) {
+				if(rects_intersect(usage.dest_area, src)) {
+					usages.push_back(usage);
+				}
+			}
+
+			if(usages.empty() == false) {
+				const int dx = dst.x() - src.x();
+				const int dy = dst.y() - src.y();
+
+				std::vector<Level::SubComponentUsage> old_usages = lvl_->getSubComponentUsages();
+				std::vector<Level::SubComponentUsage> new_usages = old_usages;
+				for(auto& usage : usages) {
+					usage.dest_area = rect(usage.dest_area.x() + dx, usage.dest_area.y() + dy, usage.dest_area.w(), usage.dest_area.h());
+					new_usages.push_back(usage);
+				}
+
+				redo.push_back(std::bind(&Level::setSubComponentUsages, lvl.get(), new_usages));
+				undo.push_back(std::bind(&Level::setSubComponentUsages, lvl.get(), old_usages));
+			}
+		}
+	}
+}
+
+BEGIN_DEFINE_CALLABLE_NOBASE(editor)
+DEFINE_FIELD(test, "int")
+	return variant(5);
+END_DEFINE_CALLABLE(editor)
+
+#endif // !NO_EDITOR

@@ -64,7 +64,7 @@
 #include "framed_gui_element.hpp"
 #include "graphical_font.hpp"
 #include "gui_section.hpp"
-#include "hex_tile.hpp"
+#include "hex.hpp"
 #include "i18n.hpp"
 #include "input.hpp"
 #include "joystick.hpp"
@@ -89,6 +89,7 @@
 #include "string_utils.hpp"
 #include "tbs_internal_server.hpp"
 #include "tile_map.hpp"
+#include "theme_imgui.hpp"
 #include "unit_test.hpp"
 #include "variant_utils.hpp"
 
@@ -119,6 +120,10 @@
 
 variant g_auto_update_info;
 
+extern int g_vsync;
+
+PREF_BOOL(desktop_fullscreen, false, "Sets the game window to be a fullscreen window the size of the desktop");
+
 namespace 
 {
 	PREF_BOOL(auto_update_module, false, "Auto updates the module from the module server on startup (number of milliseconds to spend attempting to update the module)");
@@ -130,10 +135,14 @@ namespace
 	PREF_INT(min_window_width, 1024, "Minimum window width when auto-determining window size");
 	PREF_INT(min_window_height, 768, "Minimum window height when auto-determining window size");
 
+	PREF_INT(max_window_width, 10240, "Minimum window width when auto-determining window size");
+	PREF_INT(max_window_height, 7680, "Minimum window height when auto-determining window size");
+
 	PREF_BOOL(disable_global_alpha_filter, false, "Disables using alpha-colors.png to denote some special colors as 'alpha colors'");
 
-	PREF_BOOL_PERSISTENT(desktop_fullscreen, false, "Sets the game window to be a fullscreen window the size of the desktop");
-	PREF_BOOL_PERSISTENT(desktop_fullscreen_force, false, "(Windows) forces desktop fullscreen to actually use fullscreen rather than a borderless window the size of the desktop");
+	PREF_INT(auto_size_ideal_width, 0, "");
+	PREF_INT(auto_size_ideal_height, 0, "");
+	PREF_BOOL(desktop_fullscreen_force, false, "(Windows) forces desktop fullscreen to actually use fullscreen rather than a borderless window the size of the desktop");
 	PREF_BOOL(msaa, false, "Use msaa");
 
 
@@ -296,39 +305,6 @@ namespace
 	}
 
 
-	void auto_select_resolution(const KRE::WindowPtr& wm, int *width, int *height, bool reduce)
-	{
-		ASSERT_LOG(width != nullptr, "width is null.");
-		ASSERT_LOG(height != nullptr, "height is null.");
-
-		auto mode = wm->getDisplaySize();
-		auto best_mode = mode;
-		bool found = false;
-		
-		const float MinReduction = reduce ? 0.9f : 2.0f;
-		for(auto& candidate_mode : wm->getWindowModes([](const KRE::WindowMode&){ return true; })) {
-			if(    candidate_mode.width < mode.width * MinReduction
-				&& candidate_mode.height < mode.height * MinReduction
-				&& ((candidate_mode.width >= best_mode.width
-				&& candidate_mode.height >= best_mode.height) || !found)
-				) {
-					found = true;
-					LOG_INFO("BETTER MODE IS " << candidate_mode.width << "x" << candidate_mode.height << " vs " << best_mode.width << "x" << best_mode.height);
-				best_mode = candidate_mode;
-			} else {
-				LOG_INFO("REJECTED MODE IS " << candidate_mode.width << "x" << candidate_mode.height);
-			}
-		}
-
-		if(best_mode.width < g_min_window_width || best_mode.height < g_min_window_height) {
-			best_mode.width = g_min_window_width;
-			best_mode.height = g_min_window_height;
-		}
-
-		*width = best_mode.width;
-		*height = best_mode.height;
-	}
-
 	void process_log_level(const std::string& argstr)
 	{
 		SDL_LogPriority log_priority = SDL_LOG_PRIORITY_INFO;
@@ -376,6 +352,64 @@ namespace
 
 } //namespace
 
+//   Meant to apply to only-online or mainly-online games while not
+// impacting standalone and mainly-offline games. The `citadel` module
+// would use this, and the default value is taylored to the pre existing
+// behavior of the module. The `frogatto` module does not use this.
+PREF_BOOL(remember_me, true, "Remember me (my gamer account) when connecting to the server");
+
+void auto_select_resolution(const KRE::WindowPtr& wm, int *width, int *height, bool reduce)
+{
+	ASSERT_LOG(width != nullptr, "width is null.");
+	ASSERT_LOG(height != nullptr, "height is null.");
+
+	auto mode = wm->getDisplaySize();
+	auto best_mode = mode;
+	bool found = false;
+	
+	const float MinReduction = reduce ? 0.9f : 2.0f;
+	for(auto& candidate_mode : wm->getWindowModes([](const KRE::WindowMode&){ return true; })) {
+		if(g_auto_size_ideal_width && g_auto_size_ideal_height) {
+			if(found && candidate_mode.width < best_mode.width) {
+				continue;
+			}
+
+			if(candidate_mode.width > mode.width * MinReduction) {
+				LOG_INFO("REJECTED MODE IS " << candidate_mode.width << "x" << candidate_mode.height);
+				continue;
+			}
+
+			int h = (candidate_mode.width * g_auto_size_ideal_height) / g_auto_size_ideal_width;
+			if(h > mode.height * MinReduction) {
+				continue;
+			}
+
+			best_mode = candidate_mode;
+			best_mode.height = h;
+			found = true;
+
+			LOG_INFO("BETTER MODE IS " << best_mode.width << "x" << best_mode.height);
+
+		} else
+		if(    candidate_mode.width < mode.width * MinReduction
+			&& candidate_mode.height < mode.height * MinReduction
+			&& ((candidate_mode.width >= best_mode.width
+			&& candidate_mode.height >= best_mode.height) || !found)
+		) {
+			found = true;
+			LOG_INFO("BETTER MODE IS " << candidate_mode.width << "x" << candidate_mode.height << " vs " << best_mode.width << "x" << best_mode.height);
+			best_mode = candidate_mode;
+		} else {
+			LOG_INFO("REJECTED MODE IS " << candidate_mode.width << "x" << candidate_mode.height);
+		}
+	}
+	
+	LOG_INFO("CHOSEN MODE IS " << best_mode.width << "x" << best_mode.height);
+
+	*width = best_mode.width;
+	*height = best_mode.height;
+}
+
 extern int g_tile_scale;
 extern int g_tile_size;
 
@@ -390,6 +424,8 @@ int main(int argcount, char* argvec[])
 #ifdef USE_BREAKPAD
 	breakpad::install();
 #endif
+
+	variant::registerThread();
 
 	{
 		std::vector<std::string> args;
@@ -643,8 +679,18 @@ int main(int argcount, char* argvec[])
 			print_help(std::string(argvec[0]));
 			return 0;
 		} else {
-			const bool res = preferences::parse_arg(argv[n], n+1 < argc ? argv[n+1] : "");
-			if(!res) {
+			bool require = true;
+			std::string a(argv[n]);
+			if(a.empty() == false && a[0] == '?') {
+				//putting a ? in front of an argument indicates to only use the
+				//argument if the option is known, and to ignore it silently if
+				//it's unknown to the engine.
+				a.erase(a.begin());
+				require = false;
+			}
+
+			const bool res = preferences::parse_arg(a, n+1 < argc ? argv[n+1] : "");
+			if(!res && require) {
 				print_help(std::string(argvec[0]));
 				LOG_ERROR("unrecognized arg: '" << arg);
 				return -1;
@@ -728,7 +774,7 @@ int main(int argcount, char* argvec[])
 			}
 		}
 
-		boost::intrusive_ptr<module::client> cl, anura_cl;
+		ffl::IntrusivePtr<module::client> cl, anura_cl;
 		
 		if(g_auto_update_module) {
 			cl.reset(new module::client);
@@ -910,7 +956,7 @@ int main(int argcount, char* argvec[])
 
 	variant_builder hints;
 	hints.add("renderer", "opengl");
-	hints.add("use_vsync", "false");
+	hints.add("use_vsync", g_vsync != 0 ? true : false);
 	hints.add("width", preferences::requested_window_width() > 0 ? preferences::requested_window_width() : 800);
 	hints.add("height", preferences::requested_window_height() > 0 ? preferences::requested_window_height() : 600);
 	hints.add("resizeable", g_resizeable);
@@ -926,6 +972,8 @@ int main(int argcount, char* argvec[])
 		SDL_DisplayMode dm;
 		int res = SDL_GetDesktopDisplayMode(0, &dm);
 		ASSERT_LOG(res == 0, "Could not get desktop display mode: " << SDL_GetError());
+
+		preferences::adjust_virtual_width_to_match_physical(dm.w, dm.h);
 
 		hints.set("width", dm.w);
 		hints.set("height", dm.h);
@@ -955,6 +1003,8 @@ int main(int argcount, char* argvec[])
 		int height = 0;
 		auto_select_resolution(main_wnd, &width, &height, true);
 
+		preferences::adjust_virtual_width_to_match_physical(width, height);
+
 		main_wnd->setWindowSize(width, height);
 	}
 
@@ -976,7 +1026,24 @@ int main(int argcount, char* argvec[])
 	graphics::GameScreen::get().setVirtualDimensions(vw, vh);
 	//main_wnd->setWindowIcon(module::map_file("images/window-icon.png"));
 
+	//we prefer late swap tearing so as to minimize frame loss when possible
+	int swap_result = SDL_GL_SetSwapInterval(g_vsync != 0 ? -1 : 0);
+	if(swap_result != 0 && g_vsync != 0) {
+		swap_result = SDL_GL_SetSwapInterval(1);
+	}
+	
+	if(swap_result != 0) {
+		LOG_ERROR("Could not set swap interval with SDL_GL_SetSwapInterval: " << SDL_GetError());
+	}
+
 	try {
+		std::map<std::string, std::string> shader_files;
+		module::get_unique_filenames_under_dir("data/shaders/", &shader_files);
+		for(auto p : shader_files) {
+			if(p.second.size() >= 4 && std::equal(p.second.end()-4, p.second.end(), ".cfg")) {
+				ShaderProgram::loadFromVariant(json::parse_from_file(p.second));
+			}
+		}
 		ShaderProgram::loadFromVariant(json::parse_from_file("data/shaders.cfg"));
 	} catch(const json::ParseError& e) {
 		LOG_ERROR("ERROR PARSING: " << e.errorMessage());
@@ -1061,14 +1128,11 @@ int main(int argcount, char* argvec[])
 		FramedGuiElement::init(gui_node);
 
 		try {
-			hex::loader(json::parse_from_file("data/hex_tiles.cfg"));
-		} catch(json::ParseError& pe) {
-			LOG_INFO(pe.message);
+			hex::load("data/");
 		} catch(KRE::ImageLoadError& ile) {
 			ASSERT_LOG(false, ile.what());
 		}
 
-		sound::init_music(json::parse_from_file("data/music.cfg"));
 		GraphicalFont::initForLocale(i18n::get_locale());
 		preloads = json::parse_from_file("data/preload.cfg");
 		int preload_items = preloads["preload"].num_elements();
@@ -1116,8 +1180,15 @@ int main(int argcount, char* argvec[])
 
 	bool quit = false;
 
+	// Apply a new default theme to ImGui.
+	theme_imgui_default();
+
+	{
+	LevelPtr lvl;
 	while(!quit && !show_title_screen(level_cfg)) {
-		LevelPtr lvl(load_level(level_cfg));
+		if(!lvl) {
+			lvl = load_level(level_cfg);
+		}
 		
 		//see if we're loading a multiplayer level, in which case we
 		//connect to the server.
@@ -1147,9 +1218,6 @@ int main(int argcount, char* argvec[])
 		last_draw_position() = screen_position();
 
 		assert(lvl.get());
-		if(!lvl->music().empty()) {
-			sound::play_music(lvl->music());
-		}
 
 		if(lvl->player() && level_cfg != "autosave.cfg") {
 			lvl->player()->setCurrentLevel(level_cfg);
@@ -1161,8 +1229,10 @@ int main(int argcount, char* argvec[])
 		try {
 			quit = LevelRunner(lvl, level_cfg, orig_level_cfg).play_level();
 			level_cfg = orig_level_cfg;
+			lvl.reset();
 		} catch(multiplayer_exception&) {
 		}
+	}
 	}
 
 	Level::clearCurrentLevel();
@@ -1174,7 +1244,7 @@ int main(int argcount, char* argvec[])
 	std::set<variant*> loading;
 	swap_variants_loading(loading);
 	if(loading.empty() == false) {
-		LOG_ERROR("Illegal object: " << (void*)(*loading.begin())->as_callable_loading());
+		LOG_ERROR("Illegal object: " << write_uuid((*loading.begin())->as_callable_loading()));
 		ASSERT_LOG(false, "Unresolved unserialized objects: " << loading.size());
 	}
 

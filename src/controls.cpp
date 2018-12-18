@@ -42,6 +42,8 @@
 #include "preferences.hpp"
 #include "variant.hpp"
 
+PREF_INT(max_control_history, 1024, "Maximum number of frames to keep control history for");
+
 namespace controls 
 {
 	const char** control_names()
@@ -258,12 +260,18 @@ namespace controls
 			return;
 		}
 
-		while(controls[local_player].size() <= unsigned(ncycle)) {
+		fprintf(stderr, "READ UNTIL: %d, local_player = %d\n", ncycle, local_player);
+
+		while(starting_cycles + controls[local_player].size() <= unsigned(ncycle)) {
 			read_local_controls();
 		}
 
-		while(controls[local_player].size() > unsigned(ncycle+1)) {
+		while(starting_cycles + controls[local_player].size() > unsigned(ncycle+1)) {
 			unread_local_controls();
+
+			if(controls[local_player].empty() && starting_cycles > unsigned(ncycle+1)) {
+				starting_cycles = ncycle+1;
+			}
 		}
 	}
 
@@ -273,7 +281,7 @@ namespace controls
 			return 0;
 		}
 
-		return static_cast<int>(controls[local_player].size());
+		return static_cast<int>(controls[local_player].size()) + starting_cycles;
 	}
 
 	void read_local_controls()
@@ -335,6 +343,15 @@ namespace controls
 				} else {
 					controls[n].push_back(controls[n].back());
 				}
+			}
+		}
+
+		if(controls[local_player].size() >= g_max_control_history) {
+			const int nerase = static_cast<int>(controls[local_player].size()/2);
+			starting_cycles += nerase;
+			for(int n = 0; n != nplayers; ++n) {
+				ASSERT_LOG(controls[n].size() > nerase, "No controls to erase: " << n << ", " << controls[n].size() << " vs " << nerase);
+				controls[n].erase(controls[n].begin(), controls[n].begin() + nerase);
 			}
 		}
 	}
@@ -413,6 +430,8 @@ namespace controls
 			return;
 		}
 
+		std::cerr << "READ CONTROL PACKET: " << current_cycle << "\n";
+
 		int32_t checksum;
 		memcpy(&checksum, buf, 4);
 		checksum = ntohl(checksum);
@@ -482,10 +501,18 @@ namespace controls
 			state.user = buf;
 			buf += state.user.size()+1;
 
-			if(unsigned(cycle) < controls[slot].size()) {
-				if(controls[slot][cycle] != state) {
+			const int signed_cycle_index = cycle - starting_cycles;
+			if(signed_cycle_index < 0) {
+				LOG_ERROR("Bad packet, ancient cycle index");
+				return;
+			}
+
+			const unsigned int cycle_index = static_cast<unsigned int>(signed_cycle_index);
+
+			if(cycle_index < controls[slot].size()) {
+				if(controls[slot][cycle_index] != state) {
 					LOG_INFO("RECEIVED CORRECTION");
-					controls[slot][cycle] = state;
+					controls[slot][cycle_index] = state;
 					if(first_invalid_cycle_var == -1 || first_invalid_cycle_var > cycle) {
 						//mark us as invalid back to this point, so game logic
 						//will be recalculated from here.
@@ -494,17 +521,19 @@ namespace controls
 				}
 			} else {
 				LOG_INFO("RECEIVED FUTURE PACKET!");
-				while(controls[slot].size() <= unsigned(cycle)) {
+				while(controls[slot].size() <= cycle_index) {
 					controls[slot].push_back(state);
 				}
 			}
 		}
 
+		int current_index = current_cycle - starting_cycles;
+
 		//extend the current control out to the end, to keep the assumption that
 		//controls don't change unless we get an explicit signal
-		if(current_cycle < static_cast<int>(controls[slot].size()) - 1) {
-			for(unsigned n = current_cycle + 1; n < controls[slot].size(); ++n) {
-				controls[slot][n] = controls[slot][current_cycle];
+		if(current_index < static_cast<int>(controls[slot].size()) - 1) {
+			for(unsigned n = current_index + 1; n < controls[slot].size(); ++n) {
+				controls[slot][n] = controls[slot][current_index];
 			}
 		}
 
@@ -527,7 +556,7 @@ namespace controls
 		v.push_back(local_player);
 
 		//write our current cycle
-		int32_t current_cycle = static_cast<int>(controls[local_player].size()) - 1;
+		int32_t current_cycle = starting_cycles + static_cast<int>(controls[local_player].size()) - 1;
 		int32_t current_cycle_net = htonl(current_cycle);
 		v.resize(v.size() + 4);
 		memcpy(&v[v.size()-4], &current_cycle_net, 4);
@@ -561,7 +590,7 @@ namespace controls
 			v.insert(v.end(), user, user + controls[local_player][index].user.size()+1);
 		}
 
-		LOG_INFO("WRITE CONTROL PACKET: " << v.size());
+		LOG_INFO("WRITE CONTROL PACKET: " << current_cycle << ": " << v.size() << " highest = " << our_highest_confirmed());
 	}
 
 	const variant& user_ctrl_output()
@@ -616,6 +645,9 @@ namespace controls
 	void set_checksum(int cycle, int sum)
 	{
 		our_checksums[cycle] = sum;
+		while(our_checksums.size() >= 1024) {
+			our_checksums.erase(our_checksums.begin());
+		}
 	}
 
 	void debug_dump_controls()

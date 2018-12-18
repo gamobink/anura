@@ -44,6 +44,7 @@
 namespace {
 	PREF_BOOL(quit_server_after_game, false, "");
 	PREF_BOOL(quit_server_on_parent_exit, false, "");
+	PREF_INT(tbs_server_player_timeout_ms, 20000, "");
 }
 
 namespace tbs 
@@ -132,9 +133,23 @@ namespace tbs
 				}
 			}
 
-			const std::string msg = cli_info.msg_queue.front();
-			cli_info.msg_queue.pop_front();
-			send_msg(socket, msg);
+			if(cli_info.msg_queue.size() > 1 && socket->client_version >= 1) {
+				std::vector<variant> items;
+				for(const std::string& s : cli_info.msg_queue) {
+					items.push_back(variant(s));
+				}
+
+				cli_info.msg_queue.clear();
+
+				variant_builder b;
+				b.add("items", variant(&items));
+				b.add("__type", "multimessage");
+				send_msg(socket, b.build());
+			} else {
+				const std::string msg = cli_info.msg_queue.front();
+				cli_info.msg_queue.pop_front();
+				send_msg(socket, msg);
+			}
 
 			for(socket_ptr socket : keepalive_sockets) {
 				send_msg(socket, "{ \"type\": \"keepalive\" }");
@@ -150,8 +165,6 @@ namespace tbs
 		if(session_id == -1) {
 			return;
 		}
-
-		LOG_INFO("queue_msg: " << session_id);
 
 		auto ipc_itor = ipc_clients_.find(session_id);
 		if(ipc_itor != ipc_clients_.end()) {
@@ -200,6 +213,7 @@ namespace tbs
 
 	void server::send_msg(socket_ptr socket, const std::string& msg_ref)
 	{
+		LOG_INFO("DO send_msg: " << msg_ref);
 		std::string compressed_buf;
 		std::string compress_header;
 		const std::string* msg_ptr = &msg_ref;
@@ -349,7 +363,7 @@ namespace tbs
 						time_since_last_contact = get_ms_since_last_contact(session_id);
 					}
 
-					const int DisconnectTimeoutMS = 5000;
+					const int DisconnectTimeoutMS = g_tbs_server_player_timeout_ms;
 
 					const bool disconnected = time_since_last_contact > DisconnectTimeoutMS;
 					const bool recorded_as_disconnected = g->clients_disconnected.count(session_id) == 1;

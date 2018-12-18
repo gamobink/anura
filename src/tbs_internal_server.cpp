@@ -24,6 +24,7 @@
 #include <SDL.h>
 
 #include <boost/interprocess/sync/named_semaphore.hpp>
+#include <boost/exception/diagnostic_information.hpp>
 
 #if !defined(_MSC_VER)
 #include <sys/types.h>
@@ -38,10 +39,13 @@
 #include "module.hpp"
 #include "preferences.hpp"
 #include "shared_memory_pipe.hpp"
+#include "string_utils.hpp"
 #include "tbs_internal_server.hpp"
 #include "uuid.hpp"
 #include "variant_utils.hpp"
 #include "wml_formula_callable.hpp"
+
+PREF_STRING(tbs_server_child_args, "", "Arguments to pass along to the tbs spawned child");
 
 extern std::string g_anura_exe_name;
 
@@ -341,6 +345,7 @@ void terminate_utility_process(bool* complete=nullptr)
 
 		std::string pipe_name;
 		if(ipc_pipe != nullptr) {
+			std::string error_msg;
 			for(int i = 0; i != 4 && pipe_name.empty(); ++i) {
 				std::string uuid_str = write_uuid(generate_uuid());
 				uuid_str.resize(16);
@@ -349,12 +354,18 @@ void terminate_utility_process(bool* complete=nullptr)
 					SharedMemoryPipeManager::createNamedPipe(pipe_name);
 					g_current_ipc_pipe.reset(new SharedMemoryPipe(pipe_name, true));
 					*ipc_pipe = g_current_ipc_pipe;
+				} catch(boost::exception& e) {
+					error_msg = diagnostic_information(e);
+					error_msg = "boost exception: " + error_msg;
+				} catch(std::exception& e) {
+					ASSERT_LOG(false, "Error creating local server. Try restarting your computer to resolve this problem: " << e.what());
 				} catch(...) {
 					pipe_name = "";
+					error_msg = "Unknown error";
 				}
 			}
 
-			ASSERT_LOG(*ipc_pipe, "Could not create named pipe after 64 attempts");
+			ASSERT_LOG(*ipc_pipe, "Could not create named pipe after 64 attempts: " << error_msg);
 		}
 
 		ASSERT_LOG(startup_semaphore, "Could not create semaphore");
@@ -364,6 +375,11 @@ void terminate_utility_process(bool* complete=nullptr)
 			g_local_server_port = 4096 + rand()%20000;
 
 			std::vector<std::string> args;
+
+			if(g_tbs_server_child_args.empty() == false) {
+				args = util::split(g_tbs_server_child_args, ' ');
+			}
+
 			args.push_back(formatter() << "--module=" << module::get_module_name());
 			args.push_back(formatter() << "--tbs-server-save-replay-file=" << preferences::user_data_path() << "/local-replays.cfg");
 			args.push_back("--tbs-server-local=true");

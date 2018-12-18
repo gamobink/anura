@@ -56,7 +56,7 @@
 #include "water.hpp"
 
 class Level;
-typedef boost::intrusive_ptr<Level> LevelPtr;
+typedef ffl::IntrusivePtr<Level> LevelPtr;
 
 class CurrentLevelScope 
 {
@@ -69,6 +69,7 @@ public:
 class Level : public game_logic::FormulaCallable
 {
 public:
+
 	struct Summary {
 		std::string music, title;
 	};
@@ -112,7 +113,7 @@ public:
 	void drawLater(int x, int y, int w, int h) const;
 	void draw_status() const;
 	void draw_debug_solid(int x, int y, int w, int h) const;
-	void draw_background(int x, int y, int rotation) const;
+	void draw_background(int x, int y, int rotation, float xdelta, float ydelta) const;
 	void process();
 	void set_active_chars();
 	void process_draw();
@@ -128,6 +129,7 @@ public:
 	EntityPtr board(int x, int y) const;
 	const rect& boundaries() const { return boundaries_; }
 	void set_boundaries(const rect& bounds) { boundaries_ = bounds; }
+	bool constrain_camera() const { return constrain_camera_; }
 	void add_tile(const LevelTile& t);
 	bool add_tile_rect(int zorder, int x1, int y1, int x2, int y2, const std::string& tile);
 	bool addTileRectVector(int zorder, int x1, int y1, int x2, int y2, const std::vector<std::string>& tiles);
@@ -176,6 +178,7 @@ public:
 		portal() : dest_starting_pos(false), automatic(false), saved_game(false), no_move_to_standing(false)
 		{}
 		rect area;
+		LevelPtr level_dest_obj;
 		std::string level_dest;
 		std::string dest_label;
 		std::string dest_str;
@@ -230,8 +233,8 @@ public:
 	void start_rebuild_tiles_in_background(const std::vector<int>& layers);
 
 	//a function which, if rebuilding tiles has been completed, will update
-	//with the new tiles.
-	void complete_rebuild_tiles_in_background();
+	//with the new tiles. Returns true iff there is no longer a tile build going on.
+	bool complete_rebuild_tiles_in_background();
 
 	//stop calls to start_rebuild_tiles_in_background from proceeding
 	//until unfreeze_rebuild_tiles_in_background() is called.
@@ -300,7 +303,7 @@ public:
 
 	int earliest_backup_cycle() const;
 	void replay_from_cycle(int ncycle);
-	void backup();
+	void backup(bool force=false);
 	void reverse_one_cycle();
 	void reverse_to_cycle(int ncycle);
 
@@ -328,6 +331,7 @@ public:
 	void editor_freeze_tile_updates(bool value);
 
 	float zoom_level() const;
+	bool instant_zoom_level_set() const;
 
 	void add_speech_dialog(std::shared_ptr<SpeechDialog> d);
 	void remove_speech_dialog();
@@ -396,6 +400,52 @@ public:
 	void setRenderToTexture(int width, int height);
 	KRE::RenderTargetPtr getRenderTarget() const { return rt_; }
 
+	//sends events to all objects telling them about the transition to another level. They can
+	//set transition frames and otherwise set things up for a transition.
+	int setup_level_transition(const std::string& transition_type);
+
+	static void set_level_transition_ratio(decimal value);
+
+	struct SubComponent {
+		rect source_area;
+		int num_variations;
+
+		SubComponent();
+		explicit SubComponent(variant node);
+		variant write() const;
+	};
+
+	struct SubComponentUsage {
+		rect dest_area;
+		int ncomponent;
+		int ninstance;
+
+		SubComponentUsage();
+		explicit SubComponentUsage(variant node);
+		const SubComponent& getSubComponent(const Level& lvl) const;
+		rect getSourceArea(const Level& lvl) const;
+		variant write() const;
+	};
+
+	const std::vector<SubComponent>& getSubComponents() const { return sub_components_; }
+	const std::vector<SubComponentUsage>& getSubComponentUsages() const { return sub_component_usages_; }
+
+	void setSubComponentUsages(const std::vector<SubComponentUsage>& u) { sub_component_usages_ = u; }
+
+	int addSubComponent(int w, int h);
+	void removeSubComponent(int nindex=-1);
+
+	void addSubComponentVariations(int nsub, int ndelta);
+	void setSubComponentArea(int nsub, const rect& area);
+
+	void addSubComponentUsage(int nsub, const rect& area);
+
+	void updateSubComponentFromUsage(const SubComponentUsage& usage);
+
+	std::vector<SubComponentUsage> getSubComponentUsagesOrdered() const;
+	void applySubComponents();
+
+
 private:
 	DECLARE_CALLABLE(Level);
 
@@ -455,6 +505,8 @@ private:
 	std::string title_;
 
 	rect boundaries_;
+
+	bool constrain_camera_;
 
 	struct solid_rect {
 		rect r;
@@ -538,16 +590,21 @@ private:
 		int begin_zorder, end_zorder;
 		variant shader_node;
 		mutable graphics::AnuraShaderPtr shader;
+
+		mutable KRE::RenderTargetPtr rt;
 	};
 	std::vector<FrameBufferShaderEntry> fb_shaders_;
 	mutable std::vector<graphics::AnuraShaderPtr> active_fb_shaders_;
 	mutable variant fb_shaders_variant_;
 
 	void flushFrameBufferShadersToScreen() const;
-	void applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, bool render_to_screen) const;
+	KRE::RenderTargetPtr& applyShaderToFrameBufferTexture(graphics::AnuraShaderPtr shader, bool render_to_screen) const;
 	void frameBufferEnterZorder(int zorder) const;
+
+public:
 	void shadersUpdated();
 
+private:
 	int save_point_x_, save_point_y_;
 	bool editor_;
 	EntityPtr editor_highlight_;
@@ -591,6 +648,7 @@ private:
 	bool editor_dragging_objects_;
 
 	float zoom_level_;
+	int instant_zoom_level_set_;
 	std::vector<EntityPtr> focus_override_;
 
 	std::stack<std::shared_ptr<SpeechDialog> > speech_dialogs_;
@@ -657,6 +715,9 @@ private:
 	std::vector<hex::MaskNodePtr> hex_masks_;
 
 	variant fb_render_target_;
+
+	std::vector<SubComponent> sub_components_;
+	std::vector<SubComponentUsage> sub_component_usages_;
 };
 
 bool entity_in_current_level(const Entity* e);

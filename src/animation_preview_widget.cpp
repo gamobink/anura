@@ -42,8 +42,8 @@
 namespace 
 {
 	using namespace KRE;
-	const unsigned char RedBorder[] = {0xf9, 0x30, 0x3d};
-	const unsigned char BackgroundColor[] = {0x6f, 0x6d, 0x51};
+	const unsigned char RedBorder[] = {0x3d, 0x30, 0xf9};
+	const unsigned char BackgroundColor[] = {0x51, 0x6d, 0x6f};
 
 	bool is_pixel_border(const SurfacePtr& s, int x, int y)
 	{
@@ -419,8 +419,12 @@ namespace gui
 		cycle_ = 0;
 	}
 
-	void AnimationPreviewWidget::process()
+
+	void AnimationPreviewWidget::handleProcess()
 	{
+		for(auto w : widgets_) {
+			w->process();
+		}
 	}
 
 	void AnimationPreviewWidget::handleDraw() const
@@ -438,7 +442,7 @@ namespace gui
 		if(image_texture) {
 			KRE::ClipScope::Manager clip_scope(image_area, canvas->getCamera());
 
-			const bool view_locked = mouse_buttons && locked_focus_.w()*locked_focus_.h();
+			const bool view_locked = mouse_buttons && locked_focus_.w()*locked_focus_.h() > 0;
 
 			rect focus_area;
 			if(frame_->numFramesPerRow() == 0) {
@@ -602,7 +606,7 @@ namespace gui
 		solid_rect_ = rect();
 
 		ConstSolidInfoPtr solid = frame_->solid();
-		if(solid && solid->area().w()*solid->area().h()) {
+		if(solid && solid->area().w()*solid->area().h() > 0) {
 			const rect area = solid->area();
 			solid_rect_ = rect(framex + area.x(), framey + area.y(), area.w(), area.h());
 			canvas->drawSolidRect(solid_rect_, KRE::Color(255, 255, 255, 64));
@@ -627,7 +631,7 @@ namespace gui
 	bool AnimationPreviewWidget::handleEvent(const SDL_Event& event, bool claimed)
 	{
 		for(WidgetPtr w : widgets_) {
-			claimed = w->processEvent(getPos(), event, claimed) || claimed;
+			claimed = w->processEvent(point(0,0), event, claimed) || claimed;
 		}
 
 		if(event.type == SDL_MOUSEBUTTONUP) {
@@ -675,30 +679,34 @@ namespace gui
 
 				if(dragging_sides_bitmap_&LEFT_SIDE) {
 					x1 += delta_x;
-					if(x1 > x2 - 1) {
-						x1 = x2 - 1;
-					}
 				}
 
 				if(dragging_sides_bitmap_&RIGHT_SIDE) {
 					x2 += delta_x;
-					if(x2 < x1 + 1) {
-						x2 = x1 + 1;
-					}
 				}
 
 				if(dragging_sides_bitmap_&TOP_SIDE) {
 					y1 += delta_y;
-					if(y1 > y2 - 1) {
-						y1 = y2 - 1;
-					}
 				}
 
 				if(dragging_sides_bitmap_&BOTTOM_SIDE) {
 					y2 += delta_y;
-					if(y2 < y1 + 1) {
-						y2 = y1 + 1;
-					}
+				}
+
+				if(x1 > x2 - 1 && (dragging_sides_bitmap_&LEFT_SIDE)) {
+					x1 = x2 - 1;
+				}
+
+				if(x2 < x1 + 1 && (dragging_sides_bitmap_&RIGHT_SIDE)) {
+					x2 = x1 + 1;
+				}
+
+				if(y1 > y2 - 1 && (dragging_sides_bitmap_&TOP_SIDE)) {
+					y1 = y2 - 1;
+				}
+
+				if(y2 < y1 + 1 && (dragging_sides_bitmap_&BOTTOM_SIDE)) {
+					y2 = y1 + 1;
 				}
 
 				const int width = x2 - x1;
@@ -724,8 +732,9 @@ namespace gui
 			anchor_area_ = frame_->area();
 			anchor_pad_ = frame_->pad();
 			has_motion_ = false;
+
 			if(pointInRect(p, dst_rect_)) {
-				claimed = claimMouseEvents();
+				claimed = true;
 				anchor_x_ = e.x;
 				anchor_y_ = e.y;
 			} else {
@@ -737,6 +746,10 @@ namespace gui
 					anchor_solid_y_ = e.y/2;
 				}
 			}
+
+			if(pointInRect(p, rect(x(), y(), width(), height()))) {
+				claimed = true;
+			}
 		} else if(event.type == SDL_MOUSEBUTTONUP && anchor_x_ != -1) {
 
 			const SDL_MouseButtonEvent& e = event.button;
@@ -746,7 +759,7 @@ namespace gui
 				claimed = claimMouseEvents();
 				p = mousePointToImageLoc(p);
 
-				auto surf = KRE::Surface::create(obj_["image"].as_string());
+				auto surf = KRE::Surface::create(obj_["image"].as_string(), KRE::SurfaceFlags::NO_ALPHA_FILTER|KRE::SurfaceFlags::NO_CACHE);
 
 				if(surf) {
 					rect area = get_border_rect_around_loc(surf, p.x, p.y);
@@ -801,6 +814,10 @@ namespace gui
 			}
 
 			anchor_x_ = anchor_y_ = -1;
+
+			if(pointInRect(p, rect(x(), y(), width(), height()))) {
+				claimed = true;
+			}
 		}
 
 		return claimed;

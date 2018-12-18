@@ -32,6 +32,7 @@
 template<std::size_t N>
 struct AlignedAllocator
 {
+#ifndef DEBUG_GARBAGE_COLLECTOR
 #ifdef _MSC_VER
 		void* operator new(size_t i)
 		{
@@ -52,6 +53,7 @@ struct AlignedAllocator
 		{
 			boost::alignment::aligned_free(p);
 		}
+#endif
 #endif
 };
 

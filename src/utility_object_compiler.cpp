@@ -79,7 +79,7 @@ namespace
 			dst_image = -1;
 		}
 	    
-		boost::intrusive_ptr<Frame> anim;
+		ffl::IntrusivePtr<Frame> anim;
 		int width, height;
 
 		std::string src_image;
@@ -1173,6 +1173,27 @@ namespace
 	}
 }
 
+COMMAND_LINE_UTILITY(set_png_rgb_for_alpha_zero)
+{
+	std::deque<std::string> argv(args.begin(), args.end());
+	for(auto s : argv) {
+		SDL_Surface* surf = IMG_Load(s.c_str());
+		ASSERT_LOG(surf, "Could not load image: " << s);
+
+		uint8_t* pixels = reinterpret_cast<uint8_t*>(surf->pixels);
+
+		for(int n = 0; n != surf->w*surf->h; ++n) {
+			if(pixels[3] == 0) {
+				pixels[0] = pixels[1] = pixels[2] = 0;
+				pixels[3] = 4;
+			}
+			pixels += 4;
+		}
+
+		IMG_SavePNG(surf, s.c_str());
+	}
+}
+
 COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 {
 	using namespace KRE;
@@ -1183,6 +1204,7 @@ COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 	surfaces.resize(surfaces.size()+1);
 
 	int scale = 100;
+	int alpha_threshold = 16;
 	std::string algo = "bicubic";
 	std::deque<std::string> image_files;
 	for(auto itor = argv.begin(); itor != argv.end(); ++itor) {
@@ -1192,6 +1214,9 @@ COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 		} else if(*itor == "--alg" && itor+1 != argv.end()) {
 			++itor;
 			algo = *itor;
+		} else if(*itor == "--alpha") {
+			++itor;
+			alpha_threshold = atoi(itor->c_str());
 		} else {
 			image_files.emplace_back(*itor);
 		}
@@ -1244,14 +1269,15 @@ COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 		ASSERT_LOG(s != nullptr, "No image: " << img);
 
 		const uint8_t* p = (const uint8_t*)s->pixels();
+		const uint8_t* end_p = p + s->width()*s->height()*4;
 
 		int top_pad = 0;
-		for(int i = 0; i < s->height()/2; ++i) {
+		for(int i = 0; i < s->height(); ++i) {
 			const uint8_t* top = p + i*4*s->width();
 
 			bool all_clear = true;
 			for(int j = 0; j < s->width(); ++j) {
-				if(top[j*4+3]) {
+				if(top[j*4+3] > alpha_threshold) {
 					all_clear = false;
 					break;
 				}
@@ -1265,12 +1291,12 @@ COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 		}
 
 		int bot_pad = 0;
-		for(int i = 0; i < s->height()/2; ++i) {
+		for(int i = 0; i < s->height() && top_pad+bot_pad < s->height(); ++i) {
 			const uint8_t* bot = p + (s->height()-i-1)*4*s->width();
 
 			bool all_clear = true;
 			for(int j = 0; j < s->width(); ++j) {
-				if(bot[j*4+3]) {
+				if(bot[j*4+3] > alpha_threshold) {
 					all_clear = false;
 					break;
 				}
@@ -1288,8 +1314,10 @@ COMMAND_LINE_UTILITY(build_spritesheet_from_images)
 			const uint8_t* left = p + i*4;
 			const uint8_t* right = p + (s->width()-i-1)*4;
 			bool all_clear = true;
-			for(int j = 0; j < s->width(); ++j) {
-				if(left[j*(s->width()*4)+3] || right[j*(s->width()*4)+3]) {
+			for(int j = 0; j < s->height(); ++j) {
+				ASSERT_LOG(left + j*(s->width()*4)+3 < end_p, "Off end");
+				ASSERT_LOG(right + j*(s->width()*4)+3 < end_p, "Off end");
+				if(left[j*(s->width()*4)+3] > alpha_threshold || right[j*(s->width()*4)+3] > alpha_threshold) {
 					all_clear = false;
 					break;
 				}
@@ -1446,8 +1474,6 @@ COMMAND_LINE_UTILITY(make_image_wrap)
 				for(int i = 0; i != 4; ++i) {
 					target[i] = (int(begin_line[i]) + int(end_line[i]))/2;
 				}
-
-				fprintf(stderr, "ZZZ: LINE: %d -> %d,%d,%d,%d\n", y, (int)begin_line[0], (int)begin_line[1],  (int)begin_line[2], (int)begin_line[3]);
 
 				for(int x = 0; x < BorderWidth; ++x) {
 
@@ -1797,6 +1823,134 @@ COMMAND_LINE_UTILITY(manipulate_image_template)
 	}
 }
 
+COMMAND_LINE_UTILITY(format_json)
+{
+	std::string in_file;
+	std::string out_file;
+
+	for(auto it = args.begin(); it != args.end(); ++it) {
+		if(*it == "-i") {
+			++it;
+			ASSERT_LOG(it != args.end(), "No input argument was given, though -i was specified.");
+			in_file = *it;
+		} else {
+			out_file = *it;
+		}
+	}
+
+	ASSERT_LOG(!in_file.empty(), "No input file given.");
+	ASSERT_LOG(!out_file.empty(), "No output file given.");
+	variant v = json::parse_from_file_or_die(in_file);
+	sys::write_file(out_file, v.write_json());
+}
+
+
+namespace 
+{
+	void process_terrain_folder(variant_builder& res, 
+		const std::vector<std::string>& names, 
+		const std::string& file_name, 
+		const std::string& base_folder, 
+		bool keep_borders, 
+		bool add_file_name=false)
+	{
+		LOG_INFO("Process base folder: " << base_folder);
+		std::vector<std::string> filenames;
+		std::vector<std::string> base_filenames;
+
+		std::vector<std::string> base_folder_files;
+		std::vector<std::string> base_folder_dirs;
+		sys::get_files_in_dir(base_folder, &base_folder_files, &base_folder_dirs);
+		if(add_file_name) {
+			for(const auto& dir : base_folder_dirs) {
+				process_terrain_folder(res, names, file_name.empty() ? dir : file_name + '-' + dir, base_folder + '/' + dir, keep_borders, add_file_name);
+			}
+		}
+
+		using namespace boost::filesystem;
+
+		if(!names.empty()) {
+			for(const auto& f : base_folder_files) {
+				for(const auto& base_name : names) {
+					if(f.size() >= base_name.size() && f.substr(0, base_name.size()) == base_name) {
+						path p(base_folder);
+						p /= f;
+						filenames.emplace_back(p.generic_string());
+						base_filenames.emplace_back(f);
+					}
+				}
+			}
+		} else {
+			// use all files in directory.
+			for(const auto& f : base_folder_files) {
+				path p(base_folder);
+				p /= f;
+				filenames.emplace_back(p.generic_string());
+				base_filenames.emplace_back(f);
+			}
+		}
+
+		if(base_filenames.empty()) {
+			return;
+		}
+
+		using namespace KRE;
+
+		std::vector<rect> outr;
+		std::vector<std::array<int, 4>> borders;	
+		auto s = Surface::packImages(filenames, &outr, keep_borders ? nullptr : &borders);
+		ASSERT_LOG(s != nullptr, "Couldn't fit all the images into a single spritesheet.");
+		s->savePng(file_name + ".png");
+
+		auto rect_it = outr.cbegin();
+		auto border_it = borders.cbegin();
+		for(const auto& f : base_filenames) {
+			variant_builder entry;
+			entry.add("rect", rect_it->write());
+			if(!keep_borders && ((*border_it)[0] != 0 || (*border_it)[1] != 0 || (*border_it)[2] != 0 || (*border_it)[3] != 0)) {
+				for(int n = 0; n != 4; ++n) {
+					entry.add("border", (*border_it)[n]);
+				}
+			}
+			if(add_file_name) {
+				entry.add("image", file_name + ".png");
+			}
+			if(keep_borders) {
+				const int yp = rect_it->y1()/rect_it->h();
+				const int xp = rect_it->x1()/rect_it->w();
+				char yc = '0';
+				char xc = '0';
+				if(yp < 10) {
+					yc = yp + '0';
+				} else {
+					yc = yp + 'A' - 10;
+				}
+				if(xp < 10) {
+					xc = xp + '0';
+				} else {
+					xc = xp + 'A' - 10;
+				}
+				std::stringstream sheet_pos;
+				sheet_pos << yc << xc;
+				entry.add("sheet_pos", sheet_pos.str());
+			}
+
+			std::string output_f = file_name.empty() ? f : file_name + '-' + f;
+			auto pos = output_f.rfind('.');
+			if(pos != std::string::npos) {
+				res.add(output_f.substr(0, pos), entry.build());
+			} else {
+				res.add(output_f, entry.build());
+			}
+
+			++rect_it;
+			if(!keep_borders) {
+				++border_it;
+			}
+		}
+		LOG_INFO("Finished: " << base_folder);
+	}
+}
 
 COMMAND_LINE_UTILITY(generate_terrain_spritesheet)
 {
@@ -1806,6 +1960,7 @@ COMMAND_LINE_UTILITY(generate_terrain_spritesheet)
 	std::string base_folder;
 
 	bool keep_borders = false;
+	bool directory_process = false;
 
 	for(auto it = args.begin(); it != args.end(); ++it) {
 		if(*it == "--base") {
@@ -1814,6 +1969,8 @@ COMMAND_LINE_UTILITY(generate_terrain_spritesheet)
 			base_folder = *it;
 		} else if(*it == "--keep-borders") {
 			keep_borders = true;
+		} else if(*it == "-d") {
+			directory_process = true;
 		} else {
 			names.emplace_back(*it);
 		}
@@ -1822,87 +1979,198 @@ COMMAND_LINE_UTILITY(generate_terrain_spritesheet)
 	ASSERT_LOG(!base_folder.empty(), "No base folder was given. Use --base <folder> to specify.");	
 	LOG_DEBUG("Base Folder: " << base_folder);
 
-	std::vector<std::string> filenames;
-	std::vector<std::string> base_filenames;
-
-	std::vector<std::string> base_folder_files;
-	sys::get_files_in_dir(base_folder, &base_folder_files, nullptr);
-
-	using namespace boost::filesystem;
-
-	if(!names.empty()) {
-		for(const auto& f : base_folder_files) {
-			for(const auto& base_name : names) {
-				if(f.size() >= base_name.size() && f.substr(0, base_name.size()) == base_name) {
-					path p(base_folder);
-					p /= f;
-					filenames.emplace_back(p.generic_string());
-					base_filenames.emplace_back(f);
-				}
-			}
-		}
-	} else {
-		// use all files in directory.
-		for(const auto& f : base_folder_files) {
-			path p(base_folder);
-			p /= f;
-			filenames.emplace_back(p.generic_string());
-			base_filenames.emplace_back(f);
-		}
-	}
-
-	using namespace KRE;
-
-	std::vector<rect> outr;
-	std::vector<std::array<int, 4>> borders;	
-	auto s = Surface::packImages(filenames, &outr, keep_borders ? nullptr : &borders);
-	s->savePng("temp.png");
-
 	variant_builder res;
-	auto rect_it = outr.cbegin();
-	auto border_it = borders.cbegin();
-	for(const auto& f : base_filenames) {
-		variant_builder entry;
-		entry.add("rect", rect_it->write());
-		if(!keep_borders && ((*border_it)[0] != 0 || (*border_it)[1] != 0 || (*border_it)[2] != 0 || (*border_it)[3] != 0)) {
-			for(int n = 0; n != 4; ++n) {
-				entry.add("border", (*border_it)[n]);
-			}
-		}
-		if(keep_borders) {
-			const int yp = rect_it->y1()/rect_it->h();
-			const int xp = rect_it->x1()/rect_it->w();
-			char yc = '0';
-			char xc = '0';
-			if(yp < 10) {
-				yc = yp + '0';
-			} else {
-				yc = yp + 'A' - 10;
-			}
-			if(xp < 10) {
-				xc = xp + '0';
-			} else {
-				xc = xp + 'A' - 10;
-			}
-			std::stringstream sheet_pos;
-			sheet_pos << yc << xc;
-			entry.add("sheet_pos", sheet_pos.str());
-		}
+	if(directory_process) {
+		ASSERT_LOG(sys::is_directory(base_folder), "base folder wasn't a directory.");
 
-		auto pos = f.rfind('.');
-		if(pos != std::string::npos) {
-			res.add(f.substr(0, pos), entry.build());
-		} else {
-			res.add(f, entry.build());
-		}
-
-		++rect_it;
-		if(!keep_borders) {
-			++border_it;
-		}
+		process_terrain_folder(res, names, "", base_folder, keep_borders, true);
+	} else {
+		process_terrain_folder(res, names, "temp", base_folder, keep_borders);
 	}
 	auto v = res.build();
 	std::stringstream ss;
 	v.write_json_pretty(ss, "\t");
-	sys::write_file("temp.json", ss.str());
+	sys::write_file("terrain-file-data.json", ss.str());
+}
+
+namespace {
+const int TileDim = 32;
+using namespace KRE;
+
+static const unsigned char alpha_colors[] = {
+	0x6f, 0x6d, 0x51,
+	0xf9, 0x30, 0x3d,
+};
+
+bool is_tile_empty(SurfacePtr surf, const unsigned char* pixels, int tile_x, int tile_y)
+{
+	for(int x = 0; x != TileDim; ++x) {
+		for(int y = 0; y != TileDim; ++y) {
+			const int px = tile_x*TileDim + x;
+			const int py = tile_y*TileDim + y;
+
+			const unsigned char* p = pixels + py*surf->width()*4 + px*4;
+
+//			fprintf(stderr, "%d, %d: %02x %02x %02x %02x\n", px, py, (unsigned int)p[0], (unsigned int)p[1], (unsigned int)p[2], (unsigned int)p[3]);
+
+			bool is_alpha = memcmp(p, alpha_colors, 3) == 0 || memcmp(p, alpha_colors+3, 3) == 0;
+			if(!is_alpha) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+void blit_tile(SurfacePtr surf, unsigned char* pixels, int src_tile_x, int src_tile_y, int dst_tile_x, int dst_tile_y, int rotate)
+{
+	for(int x = 0; x != TileDim; ++x) {
+		for(int y = 0; y != TileDim; ++y) {
+			const int px = src_tile_x*TileDim + x;
+			const int py = src_tile_y*TileDim + y;
+			const unsigned char* p = pixels + py*surf->width()*4 + px*4;
+			bool is_alpha = memcmp(p, alpha_colors, 3) == 0 || memcmp(p, alpha_colors+3, 3) == 0;
+			if(is_alpha) {
+				continue;
+			}
+
+			int dst_x = x;
+			int dst_y = y;
+			if(rotate == 1) {
+				dst_y = x;
+				dst_x = TileDim - y - 1;
+			} else if(rotate == 2) {
+				dst_y = TileDim - y - 1;
+				dst_x = TileDim - x - 1;
+			} else if(rotate == 3) {
+				dst_y = TileDim - x - 1;
+				dst_x = y;
+			}
+
+			const int dpx = dst_tile_x*TileDim + dst_x;
+			const int dpy = dst_tile_y*TileDim + dst_y;
+
+			unsigned char* dp = pixels + dpy*surf->width()*4 + dpx*4;
+
+			memcpy(dp, p, 4);
+		}
+	}
+	
+}
+
+}
+
+COMMAND_LINE_UTILITY(generate_tilesheet)
+{
+	using namespace KRE;
+
+	std::deque<std::string> argv(args.begin(), args.end());
+
+	ASSERT_LOG(!argv.empty(), "Must specify name of tilesheet");
+	std::string fname = argv.front();
+	argv.pop_front();
+
+	SurfacePtr surf = graphics::SurfaceCache::get(fname);
+	ASSERT_LOG(surf->getPixelFormat()->bytesPerPixel() == 4, "Incorrect bpp: " << (int)surf->getPixelFormat()->bytesPerPixel());
+	if(surf->width() != 512 || surf->width() < 64) {
+		ASSERT_LOG(false, "Input tilesheet must be 512 pixels wide and at least 64 pixels tall");
+	}
+
+	KRE::SurfaceLock lck(surf);
+	unsigned char* pixels = reinterpret_cast<unsigned char*>(surf->pixelsWriteable());
+
+	if(is_tile_empty(surf, pixels, 2, 0)) {
+		blit_tile(surf, pixels, 1, 0, 2, 0, 3);
+	}
+
+	if(is_tile_empty(surf, pixels, 3, 0)) {
+		blit_tile(surf, pixels, 1, 0, 3, 0, 2);
+	}
+
+	if(is_tile_empty(surf, pixels, 4, 0)) {
+		blit_tile(surf, pixels, 1, 0, 4, 0, 1);
+	}
+
+	if(is_tile_empty(surf, pixels, 5, 0)) {
+		blit_tile(surf, pixels, 1, 0, 5, 0, 0);
+		blit_tile(surf, pixels, 2, 0, 5, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 5, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 6, 0)) {
+		blit_tile(surf, pixels, 1, 0, 6, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 6, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 6, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 7, 0)) {
+		blit_tile(surf, pixels, 1, 0, 7, 0, 0);
+		blit_tile(surf, pixels, 2, 0, 7, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 7, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 8, 0)) {
+		blit_tile(surf, pixels, 2, 0, 8, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 8, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 8, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 9, 0)) {
+		blit_tile(surf, pixels, 1, 0, 9, 0, 0);
+		blit_tile(surf, pixels, 2, 0, 9, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 10, 0)) {
+		blit_tile(surf, pixels, 1, 0, 10, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 10, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 11, 0)) {
+		blit_tile(surf, pixels, 2, 0, 11, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 11, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 12, 0)) {
+		blit_tile(surf, pixels, 3, 0, 12, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 12, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 13, 0)) {
+		blit_tile(surf, pixels, 1, 0, 13, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 13, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 14, 0)) {
+		blit_tile(surf, pixels, 2, 0, 14, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 14, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 15, 0)) {
+		blit_tile(surf, pixels, 1, 0, 15, 0, 0);
+		blit_tile(surf, pixels, 2, 0, 15, 0, 0);
+		blit_tile(surf, pixels, 3, 0, 15, 0, 0);
+		blit_tile(surf, pixels, 4, 0, 15, 0, 0);
+	}
+
+	if(is_tile_empty(surf, pixels, 1, 1)) {
+		blit_tile(surf, pixels, 0, 1, 1, 1, 3);
+	}
+
+	if(is_tile_empty(surf, pixels, 2, 1)) {
+		blit_tile(surf, pixels, 0, 1, 2, 1, 1);
+	}
+
+	if(is_tile_empty(surf, pixels, 3, 1)) {
+		blit_tile(surf, pixels, 0, 1, 3, 1, 2);
+	}
+
+
+	for(int x = 0; x != 32; ++x) {
+		fprintf(stderr, "%d ", is_tile_empty(surf, pixels, x, 0) ? 1 : 0);
+	}
+	fprintf(stderr, "\n");
+
+	surf->savePng("sheet.png"); //module::get_module_path() + fname.str());
+
 }

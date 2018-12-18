@@ -32,6 +32,7 @@
 #include "module.hpp"
 #include "preferences.hpp"
 #include "string_utils.hpp"
+#include "unit_test.hpp"
 #include "variant_utils.hpp"
 
 namespace game_logic
@@ -111,6 +112,10 @@ namespace game_logic
 				v.push_back(variant(bo));
 			}
 			return variant(&v);
+	} else if(id == "MODULE_NAME") {
+		return variant(module::get_module_name());
+	} else if(id == "MODULE_PRETTY_NAME") {
+		return variant(module::get_module_pretty_name());
 	} else if(id == "MODULE_OPTIONS") {
 		return preferences::get_module_settings();
 	} else if(id == "MODULE_VERSION") {
@@ -154,9 +159,59 @@ namespace game_logic
 		constants_stack.push_back(m);
 	}
 
-	ConstantsLoader::~ConstantsLoader()
+	ConstantsLoader::~ConstantsLoader() NOEXCEPT(false)
 	{
 		ASSERT_EQ(constants_stack.empty(), false);
 		constants_stack.pop_back();
 	}
+}
+
+UNIT_TEST(get_constant_0) {
+	const variant screen_width_constant =
+			game_logic::get_constant("SCREEN_WIDTH");
+	CHECK_EQ(variant(1024), screen_width_constant);
+}
+
+UNIT_TEST(get_constant_1) {
+	const variant screen_height_constant =
+			game_logic::get_constant("SCREEN_HEIGHT");
+	CHECK_EQ(variant(768), screen_height_constant);
+}
+
+UNIT_TEST(get_constant_2) {
+	const variant touch_screen_constant =
+    game_logic::get_constant("TOUCH_SCREEN");
+#ifdef MOBILE_BUILD
+	CHECK_EQ(variant::from_bool(true), touch_screen_constant);
+#else
+	CHECK_EQ(variant::from_bool(false), touch_screen_constant);
+#endif
+}
+
+UNIT_TEST(get_constant_3) {
+	const variant low_end_system_constant =
+			game_logic::get_constant("LOW_END_SYSTEM");
+#ifdef MOBILE_BUILD
+	CHECK_EQ(variant(1), low_end_system_constant);
+#else
+	CHECK_EQ(variant(0), low_end_system_constant);
+#endif
+}
+
+UNIT_TEST(get_constant_4) {
+	const variant high_end_system_constant =
+			game_logic::get_constant("HIGH_END_SYSTEM");
+#ifdef MOBILE_BUILD
+	CHECK_EQ(variant(false), high_end_system_constant);
+#else
+	CHECK_EQ(variant(true), high_end_system_constant);
+#endif
+}
+
+UNIT_TEST(get_constant_5) {
+	const variant tbs_server_address_constant =
+			game_logic::get_constant("TBS_SERVER_ADDRESS");
+	const variant tbs_server_address_preference =
+			variant(preferences::get_tbs_uri().host());
+	CHECK_EQ(tbs_server_address_preference, tbs_server_address_constant);
 }

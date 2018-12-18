@@ -31,6 +31,7 @@
 #include "custom_object_type.hpp"
 #include "i18n.hpp"
 #include "filesystem.hpp"
+#include "formatter.hpp"
 #include "formula_constants.hpp"
 #include "http_client.hpp"
 #include "json_parser.hpp"
@@ -52,6 +53,16 @@ namespace module
 	{
 		PREF_STRING(module_server, "theargentlark.com", "server to use to get modules from");
 		PREF_STRING(module_port, "23455", "server port to get modules from");
+
+		PREF_STRING(module_chunk_server, "", "server to use to get modules chunk from (defaults to module_server)");
+
+		PREF_STRING(module_chunk_port, "", "server port to get modules chunk from (defaults to module_port)");
+		PREF_STRING(module_chunk_query, "POST /download_chunk?chunk_id=", "request to download a module chunk");
+		PREF_BOOL(module_chunk_deflate, false, "If true, module chunks are assumed compressed and will be deflated");
+
+		bool module_chunk_query_is_get() {
+			return g_module_chunk_query.size() > 3 && std::equal(g_module_chunk_query.begin(), g_module_chunk_query.begin()+3, "GET");
+		}
 
 		// The base files are referred to as core.
 		module::modules core = {"core", "core", "core", {""}};
@@ -136,6 +147,32 @@ namespace module
 		return fname;
 	}
 
+	std::string map_write_path(const std::string& fname, BASE_PATH_TYPE path_type)
+	{
+		if(sys::is_path_absolute(fname)) {
+			return fname;
+		}
+
+		std::string module_id = get_module_name();
+		std::string file = fname;
+		if(std::find(fname.begin(), fname.end(), ':') != fname.end()) {
+			module_id = get_module_id(fname);
+			file = get_id(fname);
+		}
+
+		for(const modules& p : loaded_paths()) {
+			if(module_id != p.name_) {
+				continue;
+			}
+
+			std::string base_path = p.base_path_[path_type];
+			std::string result = base_path + file;
+			return result;
+		}
+
+		return file;
+	}
+
 	std::map<std::string, std::string>::const_iterator find(const std::map<std::string, std::string>& filemap, const std::string& name) {
 		for(const modules& p : loaded_paths()) {
 			std::map<std::string, std::string>::const_iterator itor = filemap.find(p.abbreviation_ + ":" + name);
@@ -154,10 +191,26 @@ namespace module
 										std::map<std::string, std::string>* file_map,
 										MODULE_PREFIX_BEHAVIOR prefix)
 	{
-		for(const modules& p : loaded_paths()) {
+		auto paths = loaded_paths();
+		std::reverse(paths.begin(), paths.end());
+		for(const modules& p : paths) {
 			for(const std::string& base_path : p.base_path_) {
 				const std::string path = base_path + dir;
 				sys::get_unique_filenames_under_dir(path, file_map, prefix == MODULE_PREFIX ? p.abbreviation_ + ":" : "");
+			}
+		}
+	}
+
+	void get_all_filenames_under_dir(const std::string& dir,
+										std::multimap<std::string, std::string>* file_map,
+										MODULE_PREFIX_BEHAVIOR prefix)
+	{
+		auto paths = loaded_paths();
+		std::reverse(paths.begin(), paths.end());
+		for(const modules& p : paths) {
+			for(const std::string& base_path : p.base_path_) {
+				const std::string path = base_path + dir;
+				sys::get_all_filenames_under_dir(path, file_map, prefix == MODULE_PREFIX ? p.abbreviation_ + ":" : "");
 			}
 		}
 	}
@@ -259,7 +312,7 @@ namespace module
 			for(const std::string& dir : dirs) {
 				std::string fname = path + "/" + dir + "/module.cfg";
 				if(sys::file_exists(fname)) {
-					variant v = json::parse_from_file(fname);
+					variant v = json::parse_from_file_or_die(fname);
 					v.add_attr(variant("id"), variant(dir));
 					result.push_back(v);
 				}
@@ -280,7 +333,7 @@ namespace module
 			std::string fname = path + "/" + name + "/module.cfg";
 			LOG_INFO("LOOKING IN '" << fname << "': " << sys::file_exists(fname));
 			if(sys::file_exists(fname)) {
-				variant v = json::parse_from_file(fname);
+				variant v = json::parse_from_file_or_die(fname);
 				v.add_attr(variant("id"), variant(fname));
 				return v;
 			}
@@ -345,12 +398,7 @@ namespace module
 		std::string pretty_name = name;
 		std::string abbrev = name;
 		std::string fname = make_base_module_path(name) + "module.cfg";
-		variant v;
-		try {
-			v = json::parse_from_file(fname);
-		} catch(json::ParseError& e) {
-			ASSERT_LOG(false, "Error parsing file: " << e.errorMessage());
-		}
+		variant v = json::parse_from_file_or_die(fname);
 		std::string def_font = "FreeSans";
 		std::string def_font_cjk = "unifont";
 		auto speech_dialog_bg_color = std::make_shared<KRE::Color>(85, 53, 53, 255);
@@ -452,6 +500,10 @@ namespace module
 			if(v.has_key("version")) {
 				module_version = v["version"].as_list_int();
 			}
+
+			if(v.has_key("validate_objects")) {
+				CustomObjectType::addObjectValidationFunction(v["validate_objects"]);
+			}
 		}
 		modules m = {name, pretty_name, abbrev,
 					 {make_base_module_path(name), make_user_module_path(name)},
@@ -500,7 +552,7 @@ namespace module
 	}
 
 	void load_module_from_file(const std::string& modname, modules* mod_) {
-		variant v = json::parse_from_file("./modules/" + modname + "/module.cfg");
+		variant v = json::parse_from_file_or_die("./modules/" + modname + "/module.cfg");
 		ASSERT_LOG(mod_ != nullptr, "Invalid module pointer passed.");
 		if(v.is_map()) {
 			ASSERT_LOG(v["min_engine_version"].is_null() == false, "A min_engine_version field in the module.cfg file must be specified.");
@@ -776,6 +828,7 @@ COMMAND_LINE_UTILITY(generate_manifest)
 		std::string port = g_module_port;
 
 		std::string src_module, dst_module;
+		std::string upload_passcode;
 
 		std::deque<std::string> arguments(args.begin(), args.end());
 		while(!arguments.empty()) {
@@ -788,6 +841,10 @@ COMMAND_LINE_UTILITY(generate_manifest)
 			} else if(arg == "-p" || arg == "--port") {
 				ASSERT_LOG(arguments.empty() == false, "NEED ARGUMENT AFTER " << arg);
 				port = arguments.front();
+				arguments.pop_front();
+			} else if(arg == "--passcode") {
+				ASSERT_LOG(arguments.empty() == false, "NEED ARGUMENT AFTER " << arg);
+				upload_passcode = arguments.front();
 				arguments.pop_front();
 			} else {
 				ASSERT_LOG(dst_module.empty(), "UNRECOGNIZED ARGUMENT: " << arg);
@@ -807,6 +864,10 @@ COMMAND_LINE_UTILITY(generate_manifest)
 		attr[variant("type")] = variant("replicate_module");
 		attr[variant("src_id")] = variant(src_module);
 		attr[variant("dst_id")] = variant(dst_module);
+
+		if(upload_passcode.empty() == false) {
+			attr[variant("passcode")] = variant(upload_passcode);
+		}
 
 		const std::string msg = variant(&attr).write_json();
 
@@ -913,10 +974,6 @@ COMMAND_LINE_UTILITY(generate_manifest)
 		attr[variant("type")] = variant("prepare_upload_module");
 		attr[variant("module_id")] = variant(module_id);
 
-		if(upload_passcode.empty() == false) {
-			attr[variant("passcode")] = variant(upload_passcode);
-		}
-
 		if(module_id_override != "") {
 			attr[variant("module_id")] = variant(module_id_override);
 			package.add_attr_mutation(variant("id"), variant(module_id_override));
@@ -988,6 +1045,10 @@ COMMAND_LINE_UTILITY(generate_manifest)
 		attr[variant("type")] = variant("upload_module");
 		attr[variant("module")] = package;
 
+		if(upload_passcode.empty() == false) {
+			attr[variant("passcode")] = variant(upload_passcode);
+		}
+
 		const std::string msg = variant(&attr).write_json();
 
 		sys::write_file("./upload.txt", msg);
@@ -1037,7 +1098,7 @@ COMMAND_LINE_UTILITY(generate_manifest)
 					   out_of_date_(false),
 					   client_(new http_client(host_, port_)),
 					   nbytes_transferred_(0),
-					   nbytes_total_(0),
+					   nbytes_total_(-1),
 					   nfiles_written_(0),
 					   install_image_(false),
 					   is_new_install_(true),
@@ -1089,7 +1150,7 @@ static const int ModuleProtocolVersion = 1;
 		module_id_ = module_id;
 		force_install_ = force;
 
-		std::string current_path = install_image_ ? InstallImagePath : make_base_module_path(module_id);
+		std::string current_path = module_path();
 
 		if(!current_path.empty() && !force && sys::dir_exists(current_path + "/.git")) {
 			LOG_INFO("Not installing module " << module_id << " because a git sync exists in " << current_path);
@@ -1134,8 +1195,16 @@ static const int ModuleProtocolVersion = 1;
 
 	std::string client::module_path() const
 	{
-		const std::string path_str = preferences::dlc_path() + "/" + module_id_ + "/";
-		return path_str;
+		if(install_path_override_.empty() == false) {
+			return install_path_override_;
+		}
+
+		return get_module_path(module_id_);
+	}
+
+	std::string client::get_module_path(const std::string& module_id) const
+	{
+		return install_image_ ? InstallImagePath : make_base_module_path(module_id);
 	}
 
 	void client::rate_module(const std::string& module_id, int rating, const std::string& review)
@@ -1170,7 +1239,7 @@ static const int ModuleProtocolVersion = 1;
 
 	bool client::process()
 	{
-		if(operation_ == OPERATION_NONE || (operation_ == OPERATION_PREPARE_INSTALL && module_prepared())) {
+		if(operation_ == OPERATION_NONE || operation_ == OPERATION_PENDING_INSTALL || (operation_ == OPERATION_PREPARE_INSTALL && module_prepared())) {
 			return false;
 		}
 
@@ -1212,22 +1281,42 @@ static const int ModuleProtocolVersion = 1;
 		} 
 	}
 
-	void client::on_chunk_response(variant node, boost::shared_ptr<http_client> client, std::string response)
+	void client::complete_install()
 	{
+		ASSERT_LOG(is_pending_install(), "Trying to complete install when not pending");
+
+		perform_install_from_doc(doc_pending_chunks_);
+		doc_pending_chunks_ = variant();
+	}
+
+	void client::on_chunk_response(std::string chunk_url, variant node, boost::shared_ptr<http_client> client, std::string response)
+	{
+		if(g_module_chunk_deflate) {
+			std::vector<char> data(response.begin(), response.end());
+			auto v = zip::decompress(data);
+			std::string(v.begin(), v.end()).swap(response);
+		}
+
+		//write a copy of the response for this file to the update cache.
+		sys::write_file("update-cache/" + node["md5"].as_string(), response);
+
+		auto progress_itor = chunk_progress_.find(chunk_url);
+		if(progress_itor != chunk_progress_.end()) {
+			nbytes_transferred_ -= progress_itor->second;
+			chunk_progress_.erase(progress_itor);
+		}
+
 		nbytes_transferred_ += node["size"].as_int();
-		node.add_attr_mutation(variant("data"), variant(response));
 
 		onChunkReceived(node);
 
 		chunk_clients_.erase(std::remove(chunk_clients_.begin(), chunk_clients_.end(), client), chunk_clients_.end());
 		if(chunks_to_get_.empty()) {
 			if(chunk_clients_.empty()) {
-				perform_install_from_doc(doc_pending_chunks_);
-				doc_pending_chunks_ = variant();
-				operation_ = OPERATION_NONE;
+				operation_ = OPERATION_PENDING_INSTALL;
 			}
 		} else {
-			boost::shared_ptr<http_client> new_client(new http_client(host_, port_));
+			boost::shared_ptr<http_client> new_client(new http_client(g_module_chunk_server.empty() ? host_ : g_module_chunk_server, g_module_chunk_port.empty() ? port_ : g_module_chunk_port));
 			new_client->set_timeout_and_retry();
 
 			variant chunk = chunks_to_get_.back();
@@ -1239,21 +1328,39 @@ static const int ModuleProtocolVersion = 1;
 
 			LOG_INFO("Module request chunk: " << chunk["md5"].as_string() << "\n");
 
-			const std::string url = "POST /download_chunk?chunk_id=" + chunk["md5"].as_string();
-			const std::string doc = request.build().write_json();
+			const std::string url = g_module_chunk_query + chunk["md5"].as_string();
+			const std::string doc = module_chunk_query_is_get() ? "" : request.build().write_json();
 			new_client->send_request(url, doc,
-						  std::bind(&client::on_chunk_response, this, chunk, new_client, _1),
+						  std::bind(&client::on_chunk_response, this, url, chunk, new_client, _1),
 						  std::bind(&client::on_chunk_error, this, _1, url, doc, chunk, new_client),
-						  [](size_t a, size_t b, bool c) {}
+						  std::bind(&client::on_chunk_progress, this, url, _1, _2, _3)
 			);
 
 			chunk_clients_.push_back(new_client);
 		}
 	}
 
+	void client::on_chunk_progress(std::string chunk_url, size_t received, size_t total, bool response)
+	{
+		auto progress_itor = chunk_progress_.find(chunk_url);
+		if(progress_itor != chunk_progress_.end()) {
+			nbytes_transferred_ -= progress_itor->second;
+			chunk_progress_.erase(progress_itor);
+		}
+
+		nbytes_transferred_ += received;
+		chunk_progress_[chunk_url] = received;
+	}
+
 	void client::on_chunk_error(std::string response, std::string url, std::string doc, variant chunk, boost::shared_ptr<http_client> client)
 	{
-		LOG_INFO("Chunk error: " << chunk.as_string() << " errors = " << nchunk_errors_ << "\n");
+		auto progress_itor = chunk_progress_.find(url);
+		if(progress_itor != chunk_progress_.end()) {
+			nbytes_transferred_ -= progress_itor->second;
+			chunk_progress_.erase(progress_itor);
+		}
+
+		LOG_INFO("Chunk error: " << chunk.write_json() << " errors = " << nchunk_errors_ << "\n");
 
 		chunk_clients_.erase(std::remove(chunk_clients_.begin(), chunk_clients_.end(), client), chunk_clients_.end());
 		++nchunk_errors_;
@@ -1268,9 +1375,9 @@ static const int ModuleProtocolVersion = 1;
 			new_client->set_timeout_and_retry();
 
 			new_client->send_request(url, doc,
-				std::bind(&client::on_chunk_response, this, chunk, new_client, _1),
+				std::bind(&client::on_chunk_response, this, url, chunk, new_client, _1),
 				std::bind(&client::on_chunk_error, this, _1, url, doc, chunk, new_client),
-				[](size_t a, size_t b, bool c) {}
+				std::bind(&client::on_chunk_progress, this, url, _1, _2, _3)
 			);
 
 			chunk_clients_.push_back(new_client);
@@ -1296,7 +1403,7 @@ static const int ModuleProtocolVersion = 1;
 				LOG_ERROR("SET ERROR: " << doc.write_json());
 			} else if(operation_ == OPERATION_QUERY_VERSION_FOR_INSTALL) {
 				variant version = doc[variant("version")];
-				std::string current_path = install_image_ ? InstallImagePath : make_base_module_path(module_id_);
+				std::string current_path = module_path();
 				variant config = json::parse(sys::read_file(current_path + "/module.cfg"));
 				LOG_INFO("Server has module version " << version.write_json() << " we have " << config["version"].write_json());
 				if(version == config["version"]) {
@@ -1376,7 +1483,7 @@ static const int ModuleProtocolVersion = 1;
 		variant doc = doc_ref;
 
 		variant local_manifest;
-		std::string current_path = install_image_ ? InstallImagePath : make_base_module_path(module_id_);
+		std::string current_path = module_path();
 		if(!current_path.empty() && !force_install_ && sys::file_exists(current_path + "/module.cfg") && sys::file_exists(current_path + "/manifest.cfg")) {
 			local_manifest = json::parse(sys::read_file(current_path + "/manifest.cfg"));
 			LOG_INFO("Parsed local manifest");
@@ -1389,10 +1496,54 @@ static const int ModuleProtocolVersion = 1;
 		std::vector<variant> high_priority_chunks;
 
 		variant manifest = doc["manifest"];
+
+		LOG_INFO("Searching cache for existing files...");
+
+		int last_progress_update = SDL_GetTicks();
+
+		int nfound_in_cache = 0;
+
+
+		int ncount = 0;
 		for(auto p : manifest.as_map()) {
+			++ncount;
+
+			if(SDL_GetTicks() > last_progress_update+50) {
+				last_progress_update = SDL_GetTicks();
+				show_progress(formatter() << "Checking cache: " << ncount << "/" << manifest.as_map().size());
+			}
+
 			if(local_manifest.is_map() && local_manifest.has_key(p.first) && local_manifest[p.first][md5_variant] == p.second[md5_variant]) {
 				unchanged_keys.push_back(p.first);
-			} else if(p.second["data"].is_null()) {
+				continue;
+			}
+
+			bool cached = false;
+
+			std::string cached_fname = "update-cache/" + p.second["md5"].as_string();
+			if(p.second["data"].is_null() && sys::file_exists(cached_fname)) {
+				std::string contents = sys::read_file(cached_fname);
+				std::vector<char> data_buf(contents.begin(), contents.end());
+				const int data_size = p.second["size"].as_int();
+
+				std::vector<char> data = zip::decompress_known_size(base64::b64decode(data_buf), data_size);
+				std::string data_str(data.begin(), data.end());
+
+				if(variant(md5::sum(data_str)) == p.second["md5"]) {
+					LOG_INFO("Cached data found for " << p.second["md5"].as_string());
+					cached = true;
+					++nfound_in_cache;
+				} else {
+					LOG_INFO("ERROR: CACHE INVALID FOR " << p.second["md5"].as_string());
+					sys::remove_file(cached_fname);
+				}
+
+			}
+			
+			if(cached || p.second["data"].is_null() == false) {
+				isHighPriorityChunk(p.first, p.second);
+				onChunkReceived(p.second);
+			} else {
 				nbytes_total_ += p.second["size"].as_int();
 
 				if(isHighPriorityChunk(p.first, p.second)) {
@@ -1400,11 +1551,10 @@ static const int ModuleProtocolVersion = 1;
 				} else {
 					chunks_to_get_.push_back(p.second);
 				}
-			} else {
-				isHighPriorityChunk(p.first, p.second);
-				onChunkReceived(p.second);
 			}
 		}
+
+		LOG_INFO("Found " << nfound_in_cache << " files in cache");
 
 		for(auto v : high_priority_chunks) {
 			chunks_to_get_.push_back(v);
@@ -1439,15 +1589,15 @@ static const int ModuleProtocolVersion = 1;
 				request.add("type", "download_chunk");
 				request.add("chunk_id", chunk["md5"]);
 
-				boost::shared_ptr<http_client> client(new http_client(host_, port_));
+				boost::shared_ptr<http_client> client(new http_client(g_module_chunk_server.empty() ? host_ : g_module_chunk_server, g_module_chunk_port.empty() ? port_ : g_module_chunk_port));
 				client->set_timeout_and_retry();
 
-				const std::string url = "POST /download_chunk?chunk_id=" + chunk["md5"].as_string();
-				const std::string doc = request.build().write_json();
+				const std::string url = g_module_chunk_query + chunk["md5"].as_string();
+				const std::string doc = module_chunk_query_is_get() ? "" : request.build().write_json();
 				client->send_request(url, doc, 
-							  std::bind(&client::on_chunk_response, this, chunk, client, _1),
+							  std::bind(&client::on_chunk_response, this, url, chunk, client, _1),
 							  std::bind(&client::on_chunk_error, this, _1, url, doc, chunk, client),
-							  [](size_t a, size_t b, bool c) {}
+							  std::bind(&client::on_chunk_progress, this, url, _1, _2, _3)
 				);
 				chunk_clients_.push_back(client);
 			}
@@ -1487,7 +1637,21 @@ static const int ModuleProtocolVersion = 1;
 
 		LOG_INFO("Install files: " << (int)manifest.getKeys().as_list().size());
 
+		int last_draw = 0;
+
+		show_progress(formatter() << "Installing " << module_description_ << " files: 0/" << manifest.getKeys().as_list().size());
+		last_draw = SDL_GetTicks();
+
+		int ncount = 0;
+
 		for(variant path : manifest.getKeys().as_list()) {
+			++ncount;
+			const int new_time = SDL_GetTicks();
+			if(new_time > last_draw+50) {
+				last_draw = new_time;
+				show_progress(formatter() << "Installing " << module_description_ << " files: " << ncount << "/" << manifest.getKeys().as_list().size());
+			}
+
 			variant info = manifest[path];
 			std::string path_str = (install_image_ ? InstallImagePath : module_path()) + "/" + path.as_string();
 
@@ -1525,7 +1689,17 @@ static const int ModuleProtocolVersion = 1;
 
 			std::vector<char> data_buf;
 			{
-				const std::string data_str = info["data"].as_string();
+				std::string data_str;
+				if(info["data"].is_null()) {
+					const std::string cache_path = "update-cache/" + info["md5"].as_string();
+					data_str = sys::read_file(cache_path);
+
+					if(data_str.empty() && sys::file_exists(cache_path) == false) {
+						ASSERT_LOG(false, "Could not find data for " << info["md5"].as_string());
+					}
+				} else {
+					data_str = info["data"].as_string();
+				}
 				data_buf.insert(data_buf.begin(), data_str.begin(), data_str.end());
 			}
 			const int data_size = info["size"].as_int();
@@ -1567,16 +1741,26 @@ static const int ModuleProtocolVersion = 1;
 		//if we downloaded a full manifest of all files, make sure that
 		//locally all the files we already had are copied appropriately.
 		if(full_manifest.is_null() == false && install_image_ == false) {
+			ncount = 0;
 			for(variant path : full_manifest.getKeys().as_list()) {
+				++ncount;
 				if(manifest.has_key(path)) {
 					//we just downloaded this file.
 					continue;
 				}
 
-				const std::string path_str = preferences::dlc_path() + "/" + module_id_ + "/" + path.as_string();
+				const std::string path_str = module_path() + "/" + path.as_string();
 				if(sys::file_exists(path_str)) {
 					continue;
 				}
+
+				const int new_time = SDL_GetTicks();
+				if(new_time > last_draw+50) {
+					last_draw = new_time;
+					show_progress(formatter() << "Checking files: " << ncount << "/" << manifest.getKeys().as_list().size());
+				}
+
+				variant info = manifest[path];
 			
 				bool found = false;
 				for(auto dir : module_dirs()) {
@@ -1595,29 +1779,29 @@ static const int ModuleProtocolVersion = 1;
 
 				ASSERT_LOG(found, "Could not find file locally even though it's in the manifest: " << path.as_string());
 			}
-	}
-
-	//update the module.cfg version to be equal to the version of the module we now have.
-	variant new_module_version = doc["version"];
-
-	const std::string module_cfg_path = (install_image_ ? InstallImagePath : preferences::dlc_path() + "/" + module_id_) + "/module.cfg";
-
-	bool wrote_version = false;
-	if(sys::file_exists(module_cfg_path)) {
-		try {
-			variant node = json::parse(sys::read_file(module_cfg_path), json::JSON_PARSE_OPTIONS::NO_PREPROCESSOR);
-			node.add_attr_mutation(variant("version"), new_module_version);
-			sys::write_file(module_cfg_path, node.write_json());
-			wrote_version = true;
-		} catch(...) {
 		}
-	}
 
-	if(!wrote_version) {
-		std::map<variant,variant> m;
-		m[variant("version")] = new_module_version;
-		variant node(&m);
-		sys::write_file(module_cfg_path, node.write_json());
+		//update the module.cfg version to be equal to the version of the module we now have.
+		variant new_module_version = doc["version"];
+
+		const std::string module_cfg_path = (install_image_ ? InstallImagePath : preferences::dlc_path() + "/" + module_id_) + "/module.cfg";
+
+		bool wrote_version = false;
+		if(sys::file_exists(module_cfg_path)) {
+			try {
+				variant node = json::parse(sys::read_file(module_cfg_path), json::JSON_PARSE_OPTIONS::NO_PREPROCESSOR);
+				node.add_attr_mutation(variant("version"), new_module_version);
+				sys::write_file(module_cfg_path, node.write_json());
+				wrote_version = true;
+			} catch(...) {
+			}
+		}
+
+		if(!wrote_version) {
+			std::map<variant,variant> m;
+			m[variant("version")] = new_module_version;
+			variant node(&m);
+			sys::write_file(module_cfg_path, node.write_json());
 		}
 	}
 
@@ -1668,7 +1852,7 @@ static const int ModuleProtocolVersion = 1;
 			}
 		}
 
-		boost::intrusive_ptr<client> cl(new client(server, port));
+		ffl::IntrusivePtr<client> cl(new client(server, port));
 
 		cl->install_module(module_id, force);
 		int nbytes_transferred = 0;

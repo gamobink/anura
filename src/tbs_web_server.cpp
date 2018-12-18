@@ -30,7 +30,7 @@
 #include "filesystem.hpp"
 #include "formatter.hpp"
 #include "formula_object.hpp"
-#include "hex/hex_logical_tiles.hpp"
+//#include "hex.hpp"
 #include "json_parser.hpp"
 #include "module.hpp"
 #include "preferences.hpp"
@@ -46,7 +46,7 @@
 
 namespace {
 	PREF_STRING(tbs_server_semaphore, "", "");
-	PREF_BOOL(tbs_server_hexes, false, "Whether the tbs server should load hexes");
+	//PREF_BOOL(tbs_server_hexes, false, "Whether the tbs server should load hexes");
 	boost::interprocess::named_semaphore* g_termination_semaphore;
 
 #if defined(_MSC_VER)
@@ -203,7 +203,7 @@ namespace tbs
 		disconnect(socket);
 	}
 
-	boost::intrusive_ptr<http_client> g_game_server_http_client_to_matchmaking_server;
+	ffl::IntrusivePtr<http_client> g_game_server_http_client_to_matchmaking_server;
 }
 
 namespace 
@@ -226,9 +226,8 @@ struct IPCSession {
 }
 
 COMMAND_LINE_UTILITY(tbs_server) {
-	if(g_tbs_server_hexes) {
-		hex::logical::loader(json::parse_from_file("data/hex_tiles.cfg"));
-	}
+	//if(g_tbs_server_hexes) {
+	//}
 
 	std::vector<IPCSession> ipc_sessions;
 
@@ -354,12 +353,12 @@ COMMAND_LINE_UTILITY(tbs_server) {
 		startup_semaphore.post();
 	}
 
-	std::vector<boost::intrusive_ptr<tbs::bot> > bots;
+	std::vector<ffl::IntrusivePtr<tbs::bot> > bots;
 	for(;;) {
 		try {
 			const assert_recover_scope assert_scope;
 			for(const std::string& id : bot_id) {
-				bots.push_back(boost::intrusive_ptr<tbs::bot>(new tbs::bot(io_service, "127.0.0.1", formatter() << port, json::parse_from_file("data/tbs_test/" + id + ".cfg"))));
+				bots.push_back(ffl::IntrusivePtr<tbs::bot>(new tbs::bot(io_service, "127.0.0.1", formatter() << port, json::parse_from_file("data/tbs_test/" + id + ".cfg"))));
 			}
 		} catch(validation_failure_exception& e) {
 			std::map<variant,variant> m;

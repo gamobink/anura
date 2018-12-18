@@ -134,7 +134,7 @@ namespace http
 	}
 
 	web_server::SocketInfo::SocketInfo(boost::asio::io_service& service)
-	  : socket(service), supports_deflate(false)
+	  : socket(service), client_version(0), supports_deflate(false)
 	{
 	}
 
@@ -143,6 +143,8 @@ namespace http
 	{
 		if(port) {
 			acceptor_.reset(new boost::asio::ip::tcp::acceptor(io_service, tcp::endpoint(tcp::v4(), port)));
+			boost::asio::socket_base::reuse_address option(true);
+			acceptor_->set_option(option);
 		}
 
 		start_accept();
@@ -313,6 +315,17 @@ namespace http
 
 			environment env = parse_http_headers(headers);
 
+			static const std::string UserAgentStr("user-agent");
+			auto user_agent_itor = env.find(UserAgentStr);
+			if(user_agent_itor != env.end()) {
+				const char* p = strstr(user_agent_itor->second.c_str(), " 1.");
+				if(p != nullptr) {
+					p += 3;
+
+					socket->client_version = atoi(p);
+				}
+			}
+
 			static const std::string AcceptEncodingStr("accept-encoding");
 			auto encoding_itor = env.find(AcceptEncodingStr);
 			if(encoding_itor != env.end()) {
@@ -478,11 +491,11 @@ using namespace http;
 class test_web_server : public http::web_server {
 public:
 	test_web_server(boost::asio::io_service& io_service) : web_server(io_service) {}
-	void handlePost(socket_ptr socket, variant doc, const environment& env, const std::string& raw_msg) {
+	void handlePost(socket_ptr socket, variant doc, const environment& env, const std::string& raw_msg) override {
 
 		send_msg(socket, "text/json", "{ \"type\": \"ok\" }", "");
 	}
-	void handleGet(socket_ptr socket, const std::string& url, const std::map<std::string, std::string>& args) {
+	void handleGet(socket_ptr socket, const std::string& url, const std::map<std::string, std::string>& args) override {
 		send_msg(socket, "text/json", "{ \"type\": \"ok\" }", "");
 	}
 

@@ -41,8 +41,17 @@ namespace debug_console
 	void draw_graph();
 
 	void addMessage(const std::string& msg);
+	void clearMessages();
 	void draw();
 	void enable_screen_output(bool en=true);
+
+	bool isExecutingDebugConsoleCommand();
+
+	struct ExecuteDebugConsoleScope {
+		ExecuteDebugConsoleScope();
+		~ExecuteDebugConsoleScope();
+	};
+
 
 	class ConsoleDialog : public gui::Dialog
 	{
@@ -52,18 +61,22 @@ namespace debug_console
 
 		bool hasKeyboardFocus() const;
 
+		void clearMessages();
 		void addMessage(const std::string& msg);
 
 		void setFocus(game_logic::FormulaCallablePtr e);
 		game_logic::FormulaCallablePtr getFocus() const { return focus_; }
 	private:
+		std::string getEnteredCommand();
 		ConsoleDialog(const ConsoleDialog&);
 		void init();
 		bool handleEvent(const SDL_Event& event, bool claimed) override;
 
-		gui::TextEditorWidget* text_editor_;
+		void changeFontSize(int delta);
 
-		boost::intrusive_ptr<Level> lvl_;
+		ffl::IntrusivePtr<gui::TextEditorWidget> text_editor_;
+
+		ffl::IntrusivePtr<Level> lvl_;
 		game_logic::FormulaCallablePtr focus_;
 
 		void onMoveCursor();
@@ -73,5 +86,9 @@ namespace debug_console
 		void loadHistory();
 		std::vector<std::string> history_;
 		int history_pos_;
+
+		int prompt_pos_;
+
+		bool dragging_, resizing_;
 	};
 }
